@@ -99,12 +99,14 @@ EXPECTED_TEMPLATES = (
     "seiph_process_critic.tmpl",
     "meta_forecast_triage.tmpl",
     "postmortem_ee_distill.tmpl",
+    "red_team_audit.tmpl",
 )
 
 MARKET_BLIND_TEMPLATES = (
     "rationale_staged_turn_a.tmpl",
     "stream_likelihood_tick.tmpl",
     "belief_fold_step.tmpl",
+    "red_team_audit.tmpl",
 )
 
 
@@ -142,6 +144,7 @@ def main() -> None:
         "## Part II ·",
         "### §7.1",
         "### §7.2",
+        "### §7.3",
         "### §12.2",
         "### §12.3",
         "### §12.4",
@@ -165,9 +168,25 @@ def main() -> None:
             fail(f"§0.7 Rule 8 scope violation: forbidden token {forbidden!r} present in master plan")
     if "43497" not in text:
         fail("§5 missing Metaculus Notebook 43497 competitive bot patterns reference")
-    for req_fe in ("45615", "AskNews", "MetaculusCdfBuilder", "forecasting-tools", "forecastingresearch/forecastbench", "difficulty_fe", "FrankenNumPy", "FrankenPandas", "beads_rust"):
+    for req_fe in (
+        "45615",
+        "AskNews",
+        "MetaculusCdfBuilder",
+        "forecasting-tools",
+        "forecastingresearch/forecastbench",
+        "difficulty_fe",
+        "FrankenNumPy",
+        "FrankenPandas",
+        "beads_rust",
+        "gold_dossier_handle",
+        "episodic_events",
+        "state_doc_revisions",
+        "cass search",
+        "Bayesian Surprise",
+        "Platt",
+    ):
         if req_fe not in text:
-            fail(f"Missing required FutureEval / ForecastBench / FrankenSuite reference: {req_fe}")
+            fail(f"Missing required FutureEval / ForecastBench / FrankenSuite / v1.9 reference: {req_fe}")
 
     # 4. Canonical Subsystem Names (SUB-01 .. SUB-08)
     for sub_id, sub_name in EXPECTED_SUBSYSTEMS:
@@ -317,7 +336,7 @@ def main() -> None:
 
     print(
         f"PLAN_HYGIENE_OK: 8 subsystems, 12 ForecastRevision fields, 4 lifecycle stages, "
-        f"8 SHA256-locked templates, 10 universe metrics, 8 claims + 6 HYP-05*, "
+        f"9 SHA256-locked templates, 10 universe metrics, 8 claims + 6 HYP-05*, "
         f"{len(seen_gates)} 1-to-1 gates, 6 crates, 6 logical tiers, bitemp_sha256={tmpl_sha[:16]}..."
     )
 

@@ -4,8 +4,8 @@
 
 ## Current Repository Maturity
 
-* **Master Specification Version:** `1.8` (`2026-11-25`)
-* **Overall Implementation Status:** `Tier 0 (Plan-Only)` for the 6-crate Rust Cargo workspace (`0 / 6` crates compiled); `Tier 1 (Contract-Proved)` for the canonical immutable `ForecastRevision` 12-field schema + 4-stage lifecycle, Metaculus `201`-point/discrete CDF & FutureEval math, `forecastingresearch/forecastbench` submission JSON validation & two-way fixed-effects difficulty-adjusted Brier scoring, 8 SHA-256-locked canonical `.tmpl` prompt templates (`templates/`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 specification & audit harness (`lean_experiments/`), full-universe anti-selection-bias `universe_question_ledger` + 10-metric scorecard + `QuestionMetaForecast`, SQLite WAL/backup/migration contracts, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`, `docs/proposals/verify_refactoring_math.py`).
+* **Master Specification Version:** `1.9` (`2026-11-25`)
+* **Overall Implementation Status:** `Tier 0 (Plan-Only)` for the 6-crate Rust Cargo workspace (`0 / 6` crates compiled); `Tier 1 (Contract-Proved)` for the canonical immutable `ForecastRevision` 12-field schema + 4-stage lifecycle + 3-document question memory overlay (`§7.3`), Metaculus `201`-point/discrete CDF & FutureEval math, `forecastingresearch/forecastbench` submission JSON validation & two-way fixed-effects difficulty-adjusted Brier scoring, 9 SHA-256-locked canonical `.tmpl` prompt templates (`templates/`, including `red_team_audit.tmpl`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 specification & audit harness (`lean_experiments/`), 1D Latent-Logit Kalman market blending + Bayesian Surprise & gated Platt/extremizing witnesses (`docs/proposals/verify_refactoring_math.py`), full-universe anti-selection-bias `universe_question_ledger` + 10-metric scorecard + `QuestionMetaForecast`, SQLite WAL/backup/migration contracts, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`, `docs/proposals/verify_refactoring_math.py`).
 
 ## Gate Receipt Ledger (`GATE-01` .. `GATE-24`)
 
@@ -14,6 +14,8 @@
 | `GATE-01` .. `GATE-24` | `CLAIM-01` .. `CLAIM-08` | `SUB-01` .. `SUB-08` | `Tier 0` | *Pending `M0..M5` execution* | `UNIMPLEMENTED` |
 
 ## Chronological Delivery Entries
+
+* **2026-11-25 — `PLAN-v1.9` Full Integration of Accepted Refactoring Proposal & Strengthened Competitive Thesis:** Integrated all five accepted items from [`docs/proposals/REFACTORING_PROPOSAL.md`](../proposals/REFACTORING_PROPOSAL.md) into `COMPREHENSIVE_PLAN_FOR_FRANKEN_FORECAST.md`: (1) Three-Document Question Memory Overlay (`§7.3`: immutable `gold_dossier_handle`, append-only `episodic_events`, and `ee`-curated `state_doc_revisions`), (2) gated pre-update Red-Team skill (`templates/red_team_audit.tmpl`, SHA-256-locked & market-blind, `§9.2`/`§11.2`), (3) unified 1D Latent-Logit Kalman market blending & liquidity-scaled Bayesian Surprise (`§11.3`), (4) gated ridge-to-identity Platt scaling (`n >= 100`) + uncertainty-conditioned extremizing (`§12.7`), and (5) deeper `Eidetic Engine` (`ee`) + headless `cass search --robot --json` cognitive memory (`§14`), alongside an expanded six-point competitive-advantage thesis in `§1.3`.
 
 * **2026-11-25 — `PLAN-v1.8` FrankenSuite Expansion (`FrankenNumPy`, `FrankenPandas`, `beads_rust`) & Whole-System Refactoring Proposal:** Integrated `FrankenNumPy`, `FrankenPandas`, and `beads_rust` (`br`) into `§0.7` and `§17` (omitting `FrankenGit`), and published [`docs/proposals/REFACTORING_PROPOSAL.md`](../proposals/REFACTORING_PROPOSAL.md) + `verify_refactoring_math.py`.
 
