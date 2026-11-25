@@ -159,10 +159,12 @@ def main() -> None:
     if checkbox_hits:
         fail(f"Master plan contains {len(checkbox_hits)} mutable task checkbox(es); move to docs/delivery/")
 
-    # 3. Pure-CPU & External Sister-Project Boundary (§0.7 Rule 8)
-    for forbidden in ("RTX 3090", "GDDR6X", "VRAM", "Slot A:", "`SUB-09`"):
-        if forbidden in text:
-            fail(f"§0.7 Rule 8 boundary violation: forbidden GPU/in-repo-sim token {forbidden!r} present")
+    # 3. Clean Scope Boundaries (§0.7 Rule 8): zero wargame, NVMe size, GPU, or removed defect drift
+    for forbidden in ("wargame", "RTX 3090", "GDDR6X", "VRAM", "Slot A:", "`SUB-09`", "4 TB", "4,000 GB", "NVMe", "Defect D1", "Pre-Cutoff LLM Parametric"):
+        if forbidden.lower() in text.lower():
+            fail(f"§0.7 Rule 8 scope violation: forbidden token {forbidden!r} present in master plan")
+    if "43497" not in text:
+        fail("§5 missing Metaculus Notebook 43497 competitive bot patterns reference")
 
     # 4. Canonical Subsystem Names (SUB-01 .. SUB-08)
     for sub_id, sub_name in EXPECTED_SUBSYSTEMS:
@@ -252,7 +254,7 @@ def main() -> None:
         if "[BUDGET]" not in row:
             fail(f"§0.7 Rule 4 violation: crate LOC ceiling row missing [BUDGET] tag: {row}")
 
-    # 8. 6 Storage Tier rows in §19.2 carrying explicit §0.1 evidence tags and summing to 4,000 GB
+    # 8. 6 Logical Storage Tier rows in §19 carrying explicit §0.1 evidence tags (hardware-size agnostic)
     sec19_match = re.search(r"## §19\..*?(?=\n## §20\.|\Z)", text, flags=re.DOTALL)
     if not sec19_match:
         fail("Could not locate '## §19.' section")
@@ -261,18 +263,10 @@ def main() -> None:
         if re.match(r"^\|\s*`Tier ", line.strip())
     ]
     if len(tier_rows) != 6:
-        fail(f"Expected 6 NVMe storage tier rows in §19.2, found {len(tier_rows)}")
-    total_gb = 0
+        fail(f"Expected 6 logical storage tier rows in §19, found {len(tier_rows)}")
     for row in tier_rows:
         if not any(tag in row for tag in EVIDENCE_TAGS):
             fail(f"§0.1 violation in §19 storage row (missing evidence tag): {row}")
-        cols = [c.strip() for c in row.strip().strip("|").split("|")]
-        m_gb = re.search(r"`([\d,]+)\s*GB`", cols[3])
-        if not m_gb:
-            fail(f"Could not parse GB quota in §19.2 row: {row}")
-        total_gb += int(m_gb.group(1).replace(",", ""))
-    if total_gb != 4000:
-        fail(f"Expected 6 storage tiers to sum to 4,000 GB, got {total_gb} GB")
 
     # 9. Verbatim SHA-256 & Canonical Variable/Blinding checks across all 8 templates/*.tmpl (§9.1 & §9.2)
     tmpl_dir = ROOT / "templates"
@@ -321,7 +315,7 @@ def main() -> None:
     print(
         f"PLAN_HYGIENE_OK: 8 subsystems, 12 ForecastRevision fields, 4 lifecycle stages, "
         f"8 SHA256-locked templates, 10 universe metrics, 8 claims + 6 HYP-05*, "
-        f"{len(seen_gates)} 1-to-1 gates, 6 crates, {total_gb}GB NVMe, bitemp_sha256={tmpl_sha[:16]}..."
+        f"{len(seen_gates)} 1-to-1 gates, 6 crates, 6 logical tiers, bitemp_sha256={tmpl_sha[:16]}..."
     )
 
 

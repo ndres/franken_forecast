@@ -4,7 +4,7 @@
 
 ## Current Repository Maturity
 
-* **Master Specification Version:** `1.4` (`2026-11-25`)
+* **Master Specification Version:** `1.5` (`2026-11-25`)
 * **Overall Implementation Status:** `Tier 0 (Plan-Only)` for the 6-crate Rust Cargo workspace (`0 / 6` crates compiled); `Tier 1 (Contract-Proved)` for the canonical immutable `ForecastRevision` 12-field schema + 4-stage lifecycle, 8 SHA-256-locked canonical `.tmpl` prompt templates (`templates/`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 specification & audit harness (`lean_experiments/`), full-universe anti-selection-bias `universe_question_ledger` + 10-metric scorecard + `QuestionMetaForecast`, SQLite WAL/backup/migration contracts, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`).
 
 ## Gate Receipt Ledger (`GATE-01` .. `GATE-24`)
@@ -14,6 +14,8 @@
 | `GATE-01` .. `GATE-24` | `CLAIM-01` .. `CLAIM-08` | `SUB-01` .. `SUB-08` | `Tier 0` | *Pending `M0..M5` execution* | `UNIMPLEMENTED` |
 
 ## Chronological Delivery Entries
+
+* **2026-11-25 — `PLAN-v1.5` Plan Simplification & Metaculus Notebook `43497` Bot Patterns:** Removed all `franken_wargame` references, NVMe/hardware-sizing tables, and removed `Plan-Only` / `Pre-Cutoff` defect entries; condensed `§0.6`; and integrated five production bot patterns from Metaculus Notebook `43497` (`§5`: multi-vendor median ensembling, disagreement-triggered deep dives, multi-provider parallel search + PDF/CSV parsing, single-knob modular ablations, and `MiniBench` + defensive tail-clipping).
 
 * **2026-11-25 — `PLAN-v1.4` Canonical Variable Alignment & 8-Template Epistemic Prompt Suite (`templates/*.tmpl`):** Revised `bitemporal_event_audit.tmpl` to bind canonical `§7.1`/`§7.2` identifiers (`as_of_utc`, `event_utc`, `published_utc`, `available_utc`, `question_id`, `resolution_status`, `resolved_published_utc`, `adjudication_ev_handle`, `ev_handle`) and added 7 SHA-256-locked companion templates (`rationale_staged_turn_a/b`, `stream_likelihood_tick`, `belief_fold_step`, `seiph_process_critic`, `meta_forecast_triage`, `postmortem_ee_distill`) with automated variable-blinding enforcement in `verify_plan_hygiene.py`.
 
