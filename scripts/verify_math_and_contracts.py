@@ -335,4 +335,199 @@ with tempfile.TemporaryDirectory() as tmpj:
     assert (spent + 0.25) <= cap and not ((4.90 + 0.25) <= cap)
     jdb.close()
 
+# Canonical 12-Field ForecastRevision Immutability + 4-Stage Lifecycle (InitialForecast, SubsequentRevision,
+# HorizonForecastView, and Disjoint QuestionResolution) verification in SQLite WAL
+FORECAST_DDL = """
+CREATE TABLE questions (
+    question_id TEXT PRIMARY KEY,
+    contract_sha256 TEXT NOT NULL
+);
+CREATE TABLE evidence_vault_index (
+    ev_handle TEXT PRIMARY KEY,
+    available_utc TEXT NOT NULL
+);
+CREATE TABLE forecast_streams (
+    forecast_id TEXT PRIMARY KEY,
+    question_id TEXT NOT NULL REFERENCES questions(question_id),
+    stream_kind TEXT NOT NULL,
+    origin_revision_id TEXT
+);
+CREATE TABLE forecast_revisions (
+    revision_id TEXT PRIMARY KEY,
+    forecast_id TEXT NOT NULL REFERENCES forecast_streams(forecast_id),
+    seq_no INTEGER NOT NULL,
+    parent_revision_id TEXT REFERENCES forecast_revisions(revision_id),
+    question_id TEXT NOT NULL REFERENCES questions(question_id),
+    as_of_utc TEXT NOT NULL,
+    p_indep REAL NOT NULL CHECK (p_indep > 0.0 AND p_indep < 1.0),
+    p_market REAL CHECK (p_market IS NULL OR (p_market > 0.0 AND p_market < 1.0)),
+    probability_distribution TEXT NOT NULL,
+    evidence_handles TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    calibration_version TEXT NOT NULL,
+    rationale_handle TEXT NOT NULL REFERENCES evidence_vault_index(ev_handle),
+    resolution_status TEXT NOT NULL CHECK (resolution_status IN ('unresolved', 'resolved', 'invalidated')),
+    CHECK ((seq_no = 0 AND parent_revision_id IS NULL) OR (seq_no > 0 AND parent_revision_id IS NOT NULL)),
+    UNIQUE(forecast_id, seq_no)
+);
+CREATE TRIGGER trg_forecast_revisions_no_update
+BEFORE UPDATE ON forecast_revisions
+BEGIN
+    SELECT RAISE(ABORT, 'IMMUTABLE_FORECAST_REVISION');
+END;
+CREATE TRIGGER trg_forecast_revisions_no_delete
+BEFORE DELETE ON forecast_revisions
+BEGIN
+    SELECT RAISE(ABORT, 'IMMUTABLE_FORECAST_REVISION');
+END;
+CREATE TABLE question_resolutions (
+    resolution_id TEXT PRIMARY KEY,
+    question_id TEXT NOT NULL REFERENCES questions(question_id),
+    final_status TEXT NOT NULL CHECK (final_status IN ('resolved', 'invalidated')),
+    outcome_binary INTEGER CHECK (outcome_binary IN (0, 1) OR outcome_binary IS NULL),
+    event_utc TEXT,
+    resolved_published_utc TEXT NOT NULL,
+    recorded_available_utc TEXT NOT NULL
+);
+"""
+
+def seal_forecast_revision(conn, *, forecast_id, seq_no, parent_id, question_id, as_of_utc, p_indep, p_market,
+                           dist_obj, ev_handles, model_ver, cal_ver, rationale_handle, res_status):
+    # Enforce causal fence: all bound evidence + rationale handles must have available_utc <= as_of_utc
+    for h in list(ev_handles) + [rationale_handle]:
+        row = conn.execute("SELECT available_utc FROM evidence_vault_index WHERE ev_handle = ?", (h,)).fetchone()
+        assert row is not None, f"Missing EvidenceVault handle: {h}"
+        if row[0] > as_of_utc:
+            raise ValueError(f"TEMPORAL_FENCE_VIOLATION: {h} available_utc={row[0]} > as_of_utc={as_of_utc}")
+    canonical_payload = _json.dumps({
+        "forecast_id": forecast_id, "seq_no": seq_no, "parent": parent_id, "question_id": question_id,
+        "as_of_utc": as_of_utc, "p_indep": round(p_indep, 9),
+        "p_market": None if p_market is None else round(p_market, 9),
+        "dist": dist_obj, "ev": sorted(ev_handles), "model": model_ver, "cal": cal_ver,
+        "rat": rationale_handle, "status": res_status,
+    }, sort_keys=True)
+    rev_id = "rev_" + hashlib.sha256(canonical_payload.encode()).hexdigest()[:16]
+    conn.execute(
+        "INSERT INTO forecast_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (rev_id, forecast_id, seq_no, parent_id, question_id, as_of_utc, p_indep, p_market,
+         _json.dumps(dist_obj), _json.dumps(sorted(ev_handles)), model_ver, cal_ver, rationale_handle, res_status),
+    )
+    if seq_no == 0:
+        conn.execute("UPDATE forecast_streams SET origin_revision_id = ? WHERE forecast_id = ?", (rev_id, forecast_id))
+    return rev_id
+
+def project_at_horizon(conn, forecast_id: str, eval_as_of_utc: str):
+    row = conn.execute(
+        """SELECT revision_id, seq_no, as_of_utc, p_indep, p_market, probability_distribution, resolution_status
+           FROM forecast_revisions
+           WHERE forecast_id = ? AND as_of_utc <= ?
+           ORDER BY as_of_utc DESC, seq_no DESC LIMIT 1""",
+        (forecast_id, eval_as_of_utc),
+    ).fetchone()
+    if row is None:
+        return ("NOT_YET_ISSUED", None)
+    return ("STANDING_REVISION", {
+        "revision_id": row[0], "seq_no": row[1], "as_of_utc": row[2],
+        "p_indep": row[3], "p_market": row[4],
+        "dist": _json.loads(row[5]), "resolution_status": row[6],
+    })
+
+with tempfile.TemporaryDirectory() as tmpf:
+    fdb = sqlite3.connect(os.path.join(tmpf, "canonical.fsqlite"))
+    fdb.execute("PRAGMA journal_mode = WAL;")
+    fdb.execute("PRAGMA foreign_keys = ON;")
+    fdb.executescript(FORECAST_DDL)
+
+    fdb.execute("INSERT INTO questions VALUES ('q_baltic', 'sha256_contract_v1'), ('q_void', 'sha256_contract_v2')")
+    for h, ts in [
+        ("[ev:01#ov]", "2026-11-01T09:00:00Z"),
+        ("[ev:02#rat0]", "2026-11-01T10:00:00Z"),
+        ("[ev:03#ais]", "2026-11-10T14:00:00Z"),
+        ("[ev:04#rat1]", "2026-11-10T14:05:00Z"),
+        ("[ev:05#future]", "2026-11-20T00:00:00Z"),
+    ]:
+        fdb.execute("INSERT INTO evidence_vault_index VALUES (?, ?)", (h, ts))
+    fdb.execute("INSERT INTO forecast_streams VALUES ('fc_baltic_main', 'q_baltic', 'live_tournament', NULL)")
+    fdb.execute("INSERT INTO forecast_streams VALUES ('fc_void_main', 'q_void', 'live_tournament', NULL)")
+
+    # Stage 1: InitialForecast (seq_no = 0, parent = None)
+    r0 = seal_forecast_revision(
+        fdb, forecast_id="fc_baltic_main", seq_no=0, parent_id=None, question_id="q_baltic",
+        as_of_utc="2026-11-01T10:00:00Z", p_indep=0.18, p_market=0.15,
+        dist_obj={"kind": "binary", "p": 0.17, "n_eff": 8.0},
+        ev_handles=["[ev:01#ov]"], model_ver="gemini-4-argon@2026-05-20", cal_ver="cal-v1",
+        rationale_handle="[ev:02#rat0]", res_status="unresolved",
+    )
+
+    # Causal fence blocks binding post-cutoff evidence [ev:05#future] at 2026-11-10
+    try:
+        seal_forecast_revision(
+            fdb, forecast_id="fc_baltic_main", seq_no=1, parent_id=r0, question_id="q_baltic",
+            as_of_utc="2026-11-10T14:05:00Z", p_indep=0.62, p_market=0.48,
+            dist_obj={"kind": "binary", "p": 0.58, "n_eff": 14.0},
+            ev_handles=["[ev:05#future]"], model_ver="gemini-4-argon@2026-05-20", cal_ver="cal-v1",
+            rationale_handle="[ev:04#rat1]", res_status="unresolved",
+        )
+        assert False, "Should have blocked future evidence handle"
+    except ValueError as exc:
+        assert "TEMPORAL_FENCE_VIOLATION" in str(exc)
+
+    # Stage 2: Valid SubsequentRevision (seq_no = 1, parent = r0)
+    r1 = seal_forecast_revision(
+        fdb, forecast_id="fc_baltic_main", seq_no=1, parent_id=r0, question_id="q_baltic",
+        as_of_utc="2026-11-10T14:05:00Z", p_indep=0.62, p_market=0.48,
+        dist_obj={"kind": "binary", "p": 0.58, "n_eff": 14.0},
+        ev_handles=["[ev:01#ov]", "[ev:03#ais]"], model_ver="gemini-4-argon@2026-05-20", cal_ver="cal-v1",
+        rationale_handle="[ev:04#rat1]", res_status="unresolved",
+    )
+    rv_void = seal_forecast_revision(
+        fdb, forecast_id="fc_void_main", seq_no=0, parent_id=None, question_id="q_void",
+        as_of_utc="2026-11-01T10:00:00Z", p_indep=0.30, p_market=None,
+        dist_obj={"kind": "binary", "p": 0.30, "n_eff": 6.0},
+        ev_handles=["[ev:01#ov]"], model_ver="gemini-4-argon@2026-05-20", cal_ver="cal-v1",
+        rationale_handle="[ev:02#rat0]", res_status="unresolved",
+    )
+    fdb.commit()
+
+    # Immutability triggers MUST abort both UPDATE and DELETE on forecast_revisions
+    for bad_sql in (
+        f"UPDATE forecast_revisions SET p_indep = 0.99 WHERE revision_id = '{r0}'",
+        f"UPDATE forecast_revisions SET resolution_status = 'resolved' WHERE revision_id = '{r1}'",
+        f"DELETE FROM forecast_revisions WHERE revision_id = '{r0}'",
+    ):
+        try:
+            fdb.execute(bad_sql)
+            assert False, f"Trigger failed to block mutation: {bad_sql}"
+        except sqlite3.IntegrityError as exc:
+            assert "IMMUTABLE_FORECAST_REVISION" in str(exc)
+
+    # Stage 3: HorizonForecastView projections across pre-issuance, post-initial, and post-revision cutoffs
+    st_pre, proj_pre = project_at_horizon(fdb, "fc_baltic_main", "2026-10-31T23:59:59Z")
+    st_h0, proj_h0 = project_at_horizon(fdb, "fc_baltic_main", "2026-11-05T00:00:00Z")
+    st_h1, proj_h1 = project_at_horizon(fdb, "fc_baltic_main", "2026-11-15T00:00:00Z")
+    assert st_pre == "NOT_YET_ISSUED" and proj_pre is None
+    assert st_h0 == "STANDING_REVISION" and proj_h0["revision_id"] == r0 and proj_h0["dist"]["p"] == 0.17
+    assert st_h1 == "STANDING_REVISION" and proj_h1["revision_id"] == r1 and proj_h1["dist"]["p"] == 0.58
+
+    # Stage 4: Disjoint QuestionResolution join & void-exclusion scoring (without mutating ForecastRevision)
+    fdb.execute("INSERT INTO question_resolutions VALUES ('res_1', 'q_baltic', 'resolved', 1, '2026-11-24T04:10:00Z', '2026-11-24T05:00:00Z', '2026-11-24T05:05:00Z')")
+    fdb.execute("INSERT INTO question_resolutions VALUES ('res_2', 'q_void', 'invalidated', NULL, NULL, '2026-11-24T06:00:00Z', '2026-11-24T06:05:00Z')")
+    fdb.commit()
+
+    # Historical ForecastRevision rows still carry resolution_status == 'unresolved' as of their issuance cutoff!
+    statuses = [x[0] for x in fdb.execute("SELECT resolution_status FROM forecast_revisions").fetchall()]
+    assert statuses == ["unresolved", "unresolved", "unresolved"]
+
+    # Proper-score join excludes 'invalidated' questions cleanly and proves positive Revision Value Added (Brier improves 0.6889 -> 0.1764)
+    brier_r0 = (proj_h0["dist"]["p"] - 1.0) ** 2
+    brier_r1 = (proj_h1["dist"]["p"] - 1.0) ** 2
+    assert brier_r1 < brier_r0
+    scored_qids = [
+        x[0] for x in fdb.execute(
+            "SELECT question_id FROM question_resolutions WHERE final_status = 'resolved' AND recorded_available_utc <= '2026-11-25T00:00:00Z'"
+        ).fetchall()
+    ]
+    assert scored_qids == ["q_baltic"]
+    fdb.close()
+
 print("ALL_EXTENDED_VALIDATION_CHECKS_PASSED")
