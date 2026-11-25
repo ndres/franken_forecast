@@ -1,7 +1,7 @@
 # COMPREHENSIVE PLAN FOR FRANKENFORECAST (`fcast`)
 
 * **Repository:** `franken_forecast`
-* **Master Plan Version:** `1.7` (`2026-11-25`)
+* **Master Plan Version:** `1.8` (`2026-11-25`)
 * **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract, Metaculus `201`-point/discrete CDF & FutureEval math, `forecastingresearch/forecastbench` submission schema & two-way fixed-effects difficulty-adjusted Brier scoring, 8-template SHA-256-locked prompt suite (`templates/*.tmpl`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 formal specification draft (`lean_experiments/`), full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite WAL/backup/migration triggers, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`)
 * **Core Instruments:** `fcast` (Core CLI), `fcastd` (`Asupersync` Job Daemon), `fcast-mcp` (Model Context Protocol Server), `fcast-verify` (Offline Receipt & Temporal-Fence Auditor), `fcast-tui` (`FrankenTUI` Terminal Cockpit)
 
@@ -32,7 +32,7 @@ Subsystem and gate maturity are tracked exclusively in `docs/delivery/DELIVERY_L
 
 ### §0.2 What "Implemented" Means
 
-Nothing in this repository's Rust crate graph is implemented as of `Plan v1.7` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
+Nothing in this repository's Rust crate graph is implemented as of `Plan v1.8` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
 
 1. **Zero Stubs & Strict Toolchain:** Compiles cleanly under `nightly-2026-11-01` (Rust Edition 2024 `[UPSTREAM-SPEC]`) with `#![deny(clippy::todo, clippy::unimplemented, clippy::unwrap_used)]` and `#![forbid(unsafe_code)]` outside the audited `<= 120` `[BUDGET]` LOC POSIX FD/lock module (`fcast-infra::sys`).
 2. **Dependency Hygiene:** Passes `cargo deny check bans advisories licenses sources` with singleton `asupersync` (`0` `[BUDGET]` instances of `tokio`, `reqwest`, `hyper`, `ort`, `openssl-sys`, `rusqlite`, `sqlx`, or `petgraph`).
@@ -91,8 +91,8 @@ This specification was produced through three tightly coupled passes:
 
 The following eight (`8` `[MEASURED]`) hygiene rules govern all edits to this repository and are enforced mechanically by `scripts/verify_plan_hygiene.py`:
 
-1. **Delivery Tracking Quarantine:** Execution progress, sprint logs, task checklists (`- [ ]` / `- [x]`), and gate-receipt statuses **MUST** reside exclusively in `docs/delivery/DELIVERY_LOG.md`, **NEVER** inside `COMPREHENSIVE_PLAN_FOR_FRANKEN_FORECAST.md`.
-2. **Closed Tasks Are Not Acceptance:** Closing an agent bead, issue, or pull request **NEVER** equates to formal acceptance; only satisfying all eight (`8` `[BUDGET]`) criteria in `§0.2` promotes a gate.
+1. **Delivery Tracking Quarantine (`beads_rust` / `br` + `docs/delivery/`):** Execution progress, sprint logs, task checklists (`- [ ]` / `- [x]`), and gate-receipt statuses **MUST** reside exclusively in `docs/delivery/DELIVERY_LOG.md` and the local `beads_rust` (`br`) SQLite/JSONL task DAG, **NEVER** inside `COMPREHENSIVE_PLAN_FOR_FRANKEN_FORECAST.md`.
+2. **Closed Tasks Are Not Acceptance:** Closing a `beads_rust` (`br`) bead, issue, or pull request **NEVER** equates to formal acceptance; only satisfying all eight (`8` `[BUDGET]`) criteria in `§0.2` promotes a gate.
 3. **Process Is Never the Product:** Orchestration ceremonies, prompt scaffolding, and daemon plumbing have zero standalone value unless they produce valid, well-calibrated `ForecastRevision` series or lower deterministic workstation latency.
 4. **Line Counts Are Scope Caps, Never Schedules:** Crate LOC figures in `§17` carry `[BUDGET]` tags strictly as complexity ceilings triggering module review if exceeded—**NEVER** as output targets or schedules.
 5. **Universal Evidence Labeling:** Every numeric metric in crate scope caps (`§17`), storage/retention policies (`§19`), and validation gates (`§22`) **MUST** carry an explicit `§0.1` evidence tag. Unlabeled numbers fail CI.
@@ -577,16 +577,18 @@ flowchart LR
 
 ## §17. Franken-Suite Consumption & Strict 6-Crate Acyclic DAG
 
+Core crates consume the pure-Rust **Franken Suite** directly—`FrankenSQLite`, `FrankenTUI`, `Frankensearch`, `FrankenNetworkX`, `Asupersync`, `Eidetic Engine`, **`FrankenNumPy`** (array/RNG core in `fcast-core` & `fcast-bench` for `MetaculusCdfBuilder`, PAV isotonicity, two-way FE Brier linear algebra, and bit-exact `B = 2,000` bootstrap RNG parity), and **`FrankenPandas`** (columnar DataFrame joins/pivots in `fcast-ingest` & `fcast-bench` for `DataPack` CSV/Parquet ingestion, `fcast map`, and 10-metric/ForecastBench scorecards; excluded from `fcast-core` and `< 8 ms` TUI render paths)—while **`beads_rust` (`br`)** manages the development milestone/gate DAG outside the runtime crate graph (`0` runtime coupling).
+
 Every PR verifies `rank(dep) < rank(pkg)` via `cargo metadata` (`0` `[TARGET]` cycles). Per `§0.7` Rule 4, LOC ceilings are **strictly complexity scope caps (`[BUDGET]`), never schedules**:
 
-| Crate | DAG Layer | Allowed Workspace Dependencies | Subsystems Hosted | Max Rust LOC Cap |
+| Crate | DAG Layer | Allowed Workspace Dependencies | Subsystems & FrankenSuite Crates Hosted | Max Rust LOC Cap |
 | :--- | :--- | :--- | :--- | :--- |
-| `fcast-core` | `L0` | *None (`0` I/O, `0` net, `0` SQL)* | `ForecastRevision` (`KA-00`), `OutcomeDistribution`, `HorizonGeometry`, `ConjugateBelief`, `DecayController`, `MarketBlindingScrubber`, `DoctorProbe` | `<= 4,800 LOC` `[BUDGET]` |
-| `fcast-infra` | `L1` | `fcast-core` | `Chronicle` (`store`, `forecast_revisions`/`question_resolutions`, `vault`, Parquet, `ee`), `Metronome` `DurableJobStore`, `SafeExternalFetch`, `LlmRouter`, `Frankensearch` | `<= 7,500 LOC` `[BUDGET]` |
-| `fcast-ingest` | `L2` | `core`, `infra` | `Harvester` connectors, `BookMarkPrice`, `ForecastBench` medians, `question_data_packs`, `DomainGate`, `sentinel_alert_ledger` | `<= 7,000 LOC` `[BUDGET]` |
+| `fcast-core` | `L0` | *None (`0` I/O, `0` net, `0` SQL)* | `ForecastRevision` (`KA-00`), `OutcomeDistribution`, `MetaculusCdfBuilder`, `DecayController`, `MarketBlindingScrubber`, `FrankenNumPy` core (`0`-I/O array/RNG) | `<= 4,800 LOC` `[BUDGET]` |
+| `fcast-infra` | `L1` | `fcast-core` | `Chronicle` (`fsqlite`, `forecast_revisions`/`question_resolutions`, `vault`, Parquet, `ee`), `Metronome` `DurableJobStore` (`Asupersync`), `SafeExternalFetch`, `LlmRouter`, `Frankensearch` | `<= 7,500 LOC` `[BUDGET]` |
+| `fcast-ingest` | `L2` | `core`, `infra` | `Harvester` connectors (`Metaculus`/`AskNews`/markets), `BookMarkPrice`, `ForecastBench` medians, `question_data_packs` (`FrankenPandas`), `DomainGate`, `sentinel_alert_ledger` | `<= 7,000 LOC` `[BUDGET]` |
 | `fcast-epistemic` | `L3` | `core`, `infra`, `ingest` | `Notary` (`verify`, `rationales`), `Loom` (`fnx-*` KG, Two-Speed `belief`, `2610.04798` cyber, `ops` emitting `ForecastRevision`) | `<= 8,000 LOC` `[BUDGET]` |
-| `fcast-bench` | `L4` | `core`, `infra`, `ingest`, `epistemic` | `Crucible` (`QuestionMetaForecast`, `universe_question_ledger` 10-metric scorecard, Fréchet/PAV, `PurgedChronoSplitter`, `ReplayAsOf`) | `<= 5,400 LOC` `[BUDGET]` |
-| `fcast-app` | `L5` | `core`, `infra`, `ingest`, `epistemic`, `bench` | Binary entrypoints: `Metronome` (`daemon`), `Tether` (`mcp`, `skills`), `Cockpit` (`tui`, `cli`, `onboard`, `verify`) | `<= 7,500 LOC` `[BUDGET]` |
+| `fcast-bench` | `L4` | `core`, `infra`, `ingest`, `epistemic` | `Crucible` (`QuestionMetaForecast`, `universe_question_ledger` 10-metric scorecard, `FutureEval` + `ForecastBench` `difficulty_fe`, `FrankenNumPy` + `FrankenPandas`, `PurgedChronoSplitter`) | `<= 5,400 LOC` `[BUDGET]` |
+| `fcast-app` | `L5` | `core`, `infra`, `ingest`, `epistemic`, `bench` | Binary entrypoints: `Metronome` (`daemon`), `Tether` (`mcp`, `skills`), `Cockpit` (`FrankenTUI`, `cli`, `onboard`, `verify`) | `<= 7,500 LOC` `[BUDGET]` |
 
 ---
 
