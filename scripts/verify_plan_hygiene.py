@@ -68,6 +68,19 @@ LIFECYCLE_STAGES = (
     "QuestionResolution",
 )
 
+MANDATORY_TELEMETRY_METRICS = (
+    "brier_score",
+    "log_score",
+    "calibration_error",
+    "skill_vs_baselines",
+    "cost_per_forecast",
+    "cost_per_resolved_forecast",
+    "research_latency",
+    "forecast_coverage",
+    "pct_forecasts_revised",
+    "pct_revisions_improving_score",
+)
+
 
 def fail(msg: str) -> None:
     print(f"HYGIENE_FAIL: {msg}", file=sys.stderr)
@@ -103,7 +116,11 @@ def main() -> None:
         "## Part II ·",
         "### §7.1",
         "### §7.2",
+        "### §12.2",
+        "### §12.3",
+        "### §12.4",
         "## Part III ·",
+        "View `[6:Meta]`",
         "## Part IV ·",
         "## Part V ·",
     ]
@@ -138,6 +155,18 @@ def main() -> None:
     for stage in LIFECYCLE_STAGES:
         if stage not in sec7:
             fail(f"§7.2 missing lifecycle distinction stage: {stage}")
+
+    # 5b. Meta-Forecasting, Eligible Universe Ledger & 10 Mandatory Metrics (§12.2..§12.4)
+    sec12_match = re.search(r"## §12\..*?(?=\n## Part III|\Z)", text, flags=re.DOTALL)
+    if not sec12_match:
+        fail("Could not locate '## §12.' Crucible Meta-Forecasting & Scorecard section")
+    sec12 = sec12_match.group(0)
+    for token in ("QuestionMetaForecast", "universe_question_ledger", "trg_universe_eligible_irreversible"):
+        if token not in sec12:
+            fail(f"§12 missing required universe/meta-forecast contract token: {token}")
+    for mkey in MANDATORY_TELEMETRY_METRICS:
+        if not re.search(rf"\|\s*`{mkey}`\s*\|", sec12):
+            fail(f"§12.4 missing mandatory telemetry metric row: {mkey}")
 
     # 6. Claims & Master Gate Register 1-to-1 Claim Bijection (§0.7 Rule 6)
     claims_defined = sorted(set(re.findall(r"`(CLAIM-0[1-8])`", text)))
@@ -235,8 +264,8 @@ def main() -> None:
 
     print(
         f"PLAN_HYGIENE_OK: 8 subsystems, 12 ForecastRevision fields, 4 lifecycle stages, "
-        f"8 claims, {len(seen_gates)} 1-to-1 gates, 6 crates, {total_gb}GB NVMe, "
-        f"0 GPU/sim drift, template_sha256={tmpl_sha[:16]}..."
+        f"10 universe metrics, 8 claims, {len(seen_gates)} 1-to-1 gates, 6 crates, "
+        f"{total_gb}GB NVMe, 0 GPU/sim drift, template_sha256={tmpl_sha[:16]}..."
     )
 
 

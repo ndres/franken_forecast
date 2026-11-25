@@ -530,4 +530,182 @@ with tempfile.TemporaryDirectory() as tmpf:
     assert scored_qids == ["q_baltic"]
     fdb.close()
 
+# Full Eligible Universe Anti-Selection-Bias State Machine + QuestionMetaForecast + 10-Metric Scorecard check
+UNIVERSE_DDL = """
+CREATE TABLE universe_question_ledger (
+    question_id TEXT PRIMARY KEY,
+    discovered_utc TEXT NOT NULL,
+    is_eligible INTEGER NOT NULL CHECK (is_eligible IN (0, 1)),
+    est_cost_usd_p50 REAL NOT NULL,
+    est_latency_sec_p50 REAL NOT NULL,
+    popularity_score REAL NOT NULL CHECK (popularity_score BETWEEN 0.0 AND 100.0),
+    complexity_score REAL NOT NULL CHECK (complexity_score BETWEEN 0.0 AND 100.0),
+    disposition TEXT NOT NULL CHECK (disposition IN ('issued', 'excluded', 'abandoned', 'queued_missed', 'ineligible')),
+    reason_code TEXT,
+    total_cost_usd REAL NOT NULL DEFAULT 0.0,
+    latency_sec REAL,
+    crowd_prior REAL
+);
+CREATE TRIGGER trg_universe_eligible_irreversible
+BEFORE UPDATE ON universe_question_ledger
+WHEN OLD.is_eligible = 1 AND NEW.is_eligible = 0
+BEGIN
+    SELECT RAISE(ABORT, 'IRREVERSIBLE_ELIGIBLE_UNIVERSE_ADMISSION');
+END;
+"""
+
+def compute_ten_metric_scorecard(rows, rev_histories, outcomes):
+    elig = [r for r in rows if r["is_eligible"] == 1]
+    issued = [r for r in elig if r["disposition"] == "issued"]
+    excl = [r for r in elig if r["disposition"] == "excluded"]
+    aband = [r for r in elig if r["disposition"] == "abandoned"]
+
+    res_elig = [r for r in elig if r["question_id"] in outcomes]
+    res_issued = [r for r in issued if r["question_id"] in outcomes]
+
+    def brier(p, y):
+        return (p - y) ** 2
+
+    def log_s(p, y, eps=1e-6):
+        p = min(max(p, eps), 1.0 - eps)
+        return math.log(p) if y == 1 else math.log(1.0 - p)
+
+    # 1 & 2: Conditional (Investigated-Only) vs Full-Universe Imputed Brier & Log Score
+    bs_cond = sum(brier(rev_histories[r["question_id"]][-1], outcomes[r["question_id"]]) for r in res_issued) / len(res_issued)
+    ls_cond = sum(log_s(rev_histories[r["question_id"]][-1], outcomes[r["question_id"]]) for r in res_issued) / len(res_issued)
+
+    bs_univ_ign, ls_univ_ign, bs_univ_null, bs_base_all = 0.0, 0.0, 0.0, 0.0
+    for r in res_elig:
+        qid = r["question_id"]
+        y = outcomes[qid]
+        p_base = r["crowd_prior"]
+        bs_base_all += brier(p_base, y)
+        if r["disposition"] == "issued":
+            p_f = rev_histories[qid][-1]
+            bs_univ_ign += brier(p_f, y)
+            ls_univ_ign += log_s(p_f, y)
+            bs_univ_null += brier(p_f, y)
+        else:
+            # Un-issued (excluded/abandoned/queued): 0.50 for raw ignorance score; p_base (0 skill edge) for BSS_univ
+            bs_univ_ign += brier(0.50, y)
+            ls_univ_ign += log_s(0.50, y)
+            bs_univ_null += brier(p_base, y)
+
+    bs_univ_ign /= len(res_elig)
+    ls_univ_ign /= len(res_elig)
+    bs_base_cond = sum(brier(r["crowd_prior"], outcomes[r["question_id"]]) for r in res_issued) / len(res_issued)
+
+    # 3: Calibration Error (2-bin equal-mass ECE on resolved issued)
+    sorted_pts = sorted((rev_histories[r["question_id"]][-1], outcomes[r["question_id"]]) for r in res_issued)
+    mid = max(1, len(sorted_pts) // 2)
+    bins = [sorted_pts[:mid], sorted_pts[mid:]]
+    ece_cond = sum((len(b) / len(sorted_pts)) * abs(sum(p for p, _ in b) / len(b) - sum(y for _, y in b) / len(b)) for b in bins if b)
+
+    # 4: Skill vs baseline (Conditional vs Selection-Bias-Free Full Universe)
+    bss_cond = 1.0 - (bs_cond / bs_base_cond)
+    bss_univ = 1.0 - (bs_univ_null / bs_base_all)
+
+    # 5 & 6: Cost per forecast vs Cost per resolved forecast (including ALL sunk spend on abandoned/unresolved!)
+    cost_per_forecast = sum(r["total_cost_usd"] for r in issued) / len(issued)
+    cost_per_resolved_forecast = sum(r["total_cost_usd"] for r in elig) / len(res_issued)
+
+    # 7: Research latency (median p50 over issued)
+    lats = sorted(r["latency_sec"] for r in issued)
+    latency_p50 = lats[len(lats) // 2]
+
+    # 8: Forecast coverage + exclusion & abandonment rates over entire eligible universe
+    coverage = len(issued) / len(elig)
+    exclusion_rate = len(excl) / len(elig)
+    abandonment_rate = len(aband) / len(elig)
+
+    # 9 & 10: % Forecasts revised & % Revisions improving final score (stepwise & net R_final vs R_0)
+    revised_qids = [r["question_id"] for r in issued if len(rev_histories[r["question_id"]]) >= 2]
+    pct_revised = len(revised_qids) / len(issued)
+
+    step_wins, step_total, net_wins, net_total = 0, 0, 0, 0
+    for qid in revised_qids:
+        if qid not in outcomes:
+            continue
+        y = outcomes[qid]
+        seq = rev_histories[qid]
+        net_total += 1
+        if brier(seq[-1], y) < brier(seq[0], y):
+            net_wins += 1
+        for k in range(1, len(seq)):
+            step_total += 1
+            if brier(seq[k], y) < brier(seq[k - 1], y):
+                step_wins += 1
+
+    return {
+        "brier_score": (bs_cond, bs_univ_ign),
+        "log_score": (ls_cond, ls_univ_ign),
+        "calibration_error": ece_cond,
+        "skill_vs_baselines": (bss_cond, bss_univ),
+        "cost_per_forecast": cost_per_forecast,
+        "cost_per_resolved_forecast": cost_per_resolved_forecast,
+        "research_latency": latency_p50,
+        "forecast_coverage": coverage,
+        "exclusion_rate": exclusion_rate,
+        "abandonment_rate": abandonment_rate,
+        "pct_forecasts_revised": pct_revised,
+        "pct_revisions_improving_score": (net_wins / net_total, step_wins / step_total),
+    }
+
+with tempfile.TemporaryDirectory() as tmpu:
+    udb = sqlite3.connect(os.path.join(tmpu, "universe.fsqlite"))
+    udb.execute("PRAGMA journal_mode = WAL;")
+    udb.executescript(UNIVERSE_DDL)
+
+    cohort = [
+        # 5 issued & resolved, 1 issued & unresolved, 2 excluded pre-run, 2 abandoned mid-flight (with sunk cost!) + 1 out-of-scope sports
+        ("q1", "2026-11-01T00:00:00Z", 1, 0.08, 30.0, 82.0, 45.0, "issued", None, 0.09, 28.0, 0.35),
+        ("q2", "2026-11-01T00:00:00Z", 1, 0.06, 24.0, 74.0, 38.0, "issued", None, 0.07, 22.0, 0.60),
+        ("q3", "2026-11-01T00:00:00Z", 1, 0.10, 40.0, 41.0, 62.0, "issued", None, 0.11, 43.0, 0.25),
+        ("q4", "2026-11-01T00:00:00Z", 1, 0.07, 26.0, 90.0, 50.0, "issued", None, 0.08, 25.0, 0.70),
+        ("q5", "2026-11-01T00:00:00Z", 1, 0.09, 34.0, 55.0, 58.0, "issued", None, 0.09, 35.0, 0.40),
+        ("q6_open", "2026-11-01T00:00:00Z", 1, 0.08, 30.0, 63.0, 52.0, "issued", None, 0.08, 31.0, 0.50),
+        ("q7_excl", "2026-11-01T00:00:00Z", 1, 0.24, 110.0, 18.0, 94.0, "excluded", "complexity_exceeds_profile", 0.00, None, 0.45),
+        ("q8_excl", "2026-11-01T00:00:00Z", 1, 0.19, 95.0, 92.0, 78.0, "excluded", "low_predicted_voi", 0.00, None, 0.52),
+        ("q9_aban", "2026-11-01T00:00:00Z", 1, 0.15, 65.0, 33.0, 88.0, "abandoned", "insufficient_evidence", 0.18, 61.0, 0.30),
+        ("q10_aban", "2026-11-01T00:00:00Z", 1, 0.16, 70.0, 29.0, 91.0, "abandoned", "fold_budget_exhausted_unsealed", 0.22, 74.0, 0.65),
+        ("q11_sports", "2026-11-01T00:00:00Z", 0, 0.01, 5.0, 99.0, 10.0, "ineligible", "out_of_domain_sports", 0.00, None, None),
+    ]
+    udb.executemany("INSERT INTO universe_question_ledger VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", cohort)
+    udb.commit()
+
+    # Trigger MUST block retroactively demoting an abandoned hard question (q9_aban) from is_eligible=1 to 0!
+    try:
+        udb.execute("UPDATE universe_question_ledger SET is_eligible = 0 WHERE question_id = 'q9_aban'")
+        assert False, "Should have blocked retroactive universe demotion"
+    except sqlite3.IntegrityError as exc:
+        assert "IRREVERSIBLE_ELIGIBLE_UNIVERSE_ADMISSION" in str(exc)
+
+    cols = [d[0] for d in udb.execute("SELECT * FROM universe_question_ledger").description]
+    all_rows = [dict(zip(cols, r)) for r in udb.execute("SELECT * FROM universe_question_ledger").fetchall()]
+    udb.close()
+
+    rev_histories = {
+        "q1": [0.30, 0.15, 0.12],  # y=0: improves twice
+        "q2": [0.65, 0.82],        # y=1: improves
+        "q3": [0.28],              # y=0: unrevised
+        "q4": [0.72, 0.68, 0.88],  # y=1: step 1 dips, step 2 improves, net improves
+        "q5": [0.45, 0.55],        # y=0: revised in wrong direction (net & step worsen)
+        "q6_open": [0.50, 0.61],   # unresolved
+    }
+    outcomes = {"q1": 0, "q2": 1, "q3": 0, "q4": 1, "q5": 0, "q7_excl": 1, "q8_excl": 0, "q9_aban": 0, "q10_aban": 1}
+
+    sc = compute_ten_metric_scorecard(all_rows, rev_histories, outcomes)
+    # Coverage = 6/10 (60%), Excluded = 20%, Abandoned = 20%
+    assert abs(sc["forecast_coverage"] - 0.60) < 1e-9
+    assert abs(sc["exclusion_rate"] - 0.20) < 1e-9 and abs(sc["abandonment_rate"] - 0.20) < 1e-9
+    # Selection-bias proof: Conditional BSS (+25.7%) is > 2.3x Full-Universe BSS (+11.1%), a +14.6pp illusion!
+    bss_cond, bss_univ = sc["skill_vs_baselines"]
+    assert bss_cond > 2.0 * bss_univ and (bss_cond - bss_univ) > 0.14, (bss_cond, bss_univ)
+    # Sunk-cost proof: Cost per resolved forecast ($0.92 / 5 = $0.184) > 2x Cost per issued forecast ($0.52 / 6 = $0.0867)!
+    assert sc["cost_per_resolved_forecast"] > 2.0 * sc["cost_per_forecast"]
+    # Revision tracking: 5/6 (83.33%) revised; 3/4 (75%) net improved on resolved revised streams; 4/6 (66.67%) step improved
+    assert abs(sc["pct_forecasts_revised"] - (5.0 / 6.0)) < 1e-9
+    assert abs(sc["pct_revisions_improving_score"][0] - 0.75) < 1e-9
+    assert abs(sc["pct_revisions_improving_score"][1] - (4.0 / 6.0)) < 1e-9
+
 print("ALL_EXTENDED_VALIDATION_CHECKS_PASSED")

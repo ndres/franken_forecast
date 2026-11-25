@@ -1,8 +1,8 @@
 # COMPREHENSIVE PLAN FOR FRANKENFORECAST (`fcast`)
 
 * **Repository:** `franken_forecast`
-* **Master Plan Version:** `1.1` (`2026-11-25`)
-* **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract, reference math, SQLite WAL/backup/migration triggers, rationale staging, log-score VoI stopping, conjugate decay, and document hygiene (`scripts/verify_math_and_contracts.py`, `scripts/verify_plan_hygiene.py`)
+* **Master Plan Version:** `1.2` (`2026-11-25`)
+* **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract, full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite WAL/backup/migration triggers, rationale staging, log-score VoI stopping, conjugate decay, and document hygiene (`scripts/verify_math_and_contracts.py`, `scripts/verify_plan_hygiene.py`)
 * **Core Instruments:** `fcast` (Core CLI), `fcastd` (`Asupersync` Job Daemon), `fcast-mcp` (Model Context Protocol Server), `fcast-verify` (Offline Receipt & Temporal-Fence Auditor), `fcast-tui` (`FrankenTUI` Terminal Cockpit)
 * **Companion Sister Project (External):** `franken_wargame` (separate multi-agent geopolitical wargaming repository consuming `franken_forecast` strictly via read-only MCP/Parquet snapshots; `0` write coupling)
 * **Target Hardware & OS Envelope:** CPU-complete pure Rust (`0` `[BUDGET]` GPUs) on **macOS 15+ (`aarch64` Apple Silicon)** and **Linux 6.1+ (`x86_64` / `aarch64`)**, backed by **4 TB (`4,000 GB` `[BUDGET]`) NVMe SSD** tiered storage
@@ -34,7 +34,7 @@ Subsystem and gate maturity are tracked exclusively in `docs/delivery/DELIVERY_L
 
 ### §0.2 What "Implemented" Means
 
-Nothing in this repository's Rust crate graph is implemented as of `Plan v1.1` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
+Nothing in this repository's Rust crate graph is implemented as of `Plan v1.2` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
 
 1. **Zero Stubs & Strict Toolchain:** Compiles cleanly under `nightly-2026-11-01` (Rust Edition 2024 `[UPSTREAM-SPEC]`) with `#![deny(clippy::todo, clippy::unimplemented, clippy::unwrap_used)]` and `#![forbid(unsafe_code)]` outside the audited `<= 120` `[BUDGET]` LOC POSIX FD/lock module (`fcast-infra::sys`).
 2. **Dependency Hygiene:** Passes `cargo deny check bans advisories licenses sources` with singleton `asupersync` (`0` `[BUDGET]` instances of `tokio`, `reqwest`, `hyper`, `ort`, `openssl-sys`, `rusqlite`, `sqlx`, `petgraph`, or C++/GPU FFI crates).
@@ -77,10 +77,10 @@ Every capability in `franken_forecast` belongs to exactly one of eight (`8` `[ME
 | `SUB-02` | **Harvester** | `fcast-ingest::*`, `fcast-infra::fetch` | Orderbook microstructure (`BookMarkPrice` Stoikov microprice + tick-aware `φ_liq`), comment/rationale fetchers, ForecastBench human/community median backfill, `available_utc` data packs with Horvitz-Thompson lag correction, `symphonia` `24m` audio chunker, `SafeExternalFetch`, and `DomainGate`. |
 | `SUB-03` | **Notary** | `fcast-epistemic::{verify,rationales}`, `fcast-core::blinding` | Verbatim bi-temporal `event_utc` vs. `published_utc` union-envelope auditor, mechanical 2-turn staged-reveal `6D+2G` (`CT/EI/OV/ME/EJ/PR` + `G1/G2`) rationale judge, `QuestionResolution` evidence verifier, and `MarketBlindingScrubber`. |
 | `SUB-04` | **Loom** | `fcast-epistemic::{graph,belief,ops}`, `fcast-core::{forecast,math}` | 4-layer `fnx-*` causal Knowledge Graph, Two-Speed Dynamic Belief Engine (Tier-0 `ConjugateBelief` + Kulhavý–Zarrop `DecayController` + EvolveCast `κ_LR` + KL-gated cache escalating to Tier-1 CAS-handle PBM `fold`, Martingale KL `FoldStoppingController`, `0..5` `SEIPH`, TimeSeek deferral, `2610.04798` cyber calibrator), and `map`/`decision`/`scenario`/`decompose`—sealing every issuance and update as an immutable `ForecastRevision`. |
-| `SUB-05` | **Crucible** | `fcast-bench::*`, `scripts/optimize-gepa` | ForecastBench tournament engine (`HorizonForecastView` evaluation slices, `Combo` signed Fréchet bounds, geometry-aware horizons, VoI Batch router, TimeSeek lifecycle checkpoint Brier/Log Skill joined against `QuestionResolution`) and air-gapped `PurgedChronoSplitter` + `ReplayAsOf` `dspy.GEPA` Pareto optimizer. |
+| `SUB-05` | **Crucible** | `fcast-bench::*`, `scripts/optimize-gepa` | Pre-dispatch Question Meta-Forecaster (`QuestionMetaForecast`), irreversible `universe_question_ledger` (tracking full eligible universe, exclusion & abandonment rates), selection-bias-free 10-metric scorecard (`HorizonForecastView ⋈ QuestionResolution`), `ForecastBench` solver, and air-gapped `dspy.GEPA` optimizer. |
 | `SUB-06` | **Metronome** | `fcast-infra::jobs`, `fcast-app::daemon` | Persistent `Asupersync` 4-lane background job daemon (`fcastd`), `O_CLOEXEC` singleton lock, crash-safe `fcast_jobs` visibility leases, `0600` UDS `daemon.sock` push bus, `launchd`/`systemd` supervisors, and `daemon_budget_ledger` daily USD spend circuit breaker. |
 | `SUB-07` | **Tether** | `fcast-app::{mcp,skills}` | First-class Model Context Protocol server (`fcast-mcp` on `dup`/`dup2`-quarantined `stdio` + loopback `Streamable HTTP`) with async `Metronome` job handles, `fcast://` resource subscriptions (serving harnesses and external `franken_wargame`), parameterized prompts, and static-linted compiled skill packs (`pi_agent_rust`, `Hermes`, `Antigravity`). |
-| `SUB-08` | **Cockpit** | `fcast-app::{tui,cli,onboard,verify}` | Sub-16ms `FrankenTUI` 7-view terminal dashboard (including `[7:Revisions]` longitudinal `ForecastRevision` & horizon-audit view), 3-curve split vs. 6-strip synchronized comparison physics, coexisting `24h`/`7d` cadence deltas, progressive `fcast init` onboarding, `fcast-verify`, and atomic 4-phase `[H]` PTY harness handoff. |
+| `SUB-08` | **Cockpit** | `fcast-app::{tui,cli,onboard,verify}` | Sub-16ms `FrankenTUI` 7-view terminal dashboard (including `[6:Meta]` *"Forecast the Forecasts"* & Full-Universe 10-Metric Scorecard pane and `[7:Revisions]` longitudinal `ForecastRevision` audit view), 3-curve split vs. 6-strip comparison physics, progressive `fcast init` onboarding, `fcast-verify`, and atomic 4-phase `[H]` PTY handoff. |
 
 ### §0.6 How This Plan Was Produced
 
@@ -103,7 +103,7 @@ The following eight (`8` `[MEASURED]`) hygiene rules govern all edits to this re
 4. **Line Counts Are Scope Caps, Never Schedules:** Crate LOC figures in `§17` carry `[BUDGET]` tags strictly as complexity ceilings triggering module review if exceeded—**NEVER** as output targets or schedules.
 5. **Universal Evidence Labeling:** Every numeric metric in hardware/storage tables (`§5`, `§19`), crate scope caps (`§17`), and validation gates (`§22`) **MUST** carry an explicit `§0.1` evidence tag. Unlabeled numbers fail CI.
 6. **Strict Claim-Boundary Bijection:** The eight (`8` `[MEASURED]`) core project claims (`CLAIM-01` .. `CLAIM-08`) **MUST NEVER** be conflated. In `§22`, every `GATE-XX` row **MUST** map to **exactly one** primary `CLAIM-XX`, and every `CLAIM-XX` **MUST** be tested by at least two (`2` `[BUDGET]`) independent gates.
-7. **Frozen Verbatim Prompt & Canonical Field Integrity:** `templates/bitemporal_event_audit.tmpl` **MUST** match its embedded block in `§9` byte-for-byte via SHA-256, and `§7.1` **MUST** preserve all twelve (`12` `[MEASURED]`) canonical `ForecastRevision` fields.
+7. **Frozen Verbatim Prompt, Canonical Revision & 10-Metric Universe Integrity:** `templates/bitemporal_event_audit.tmpl` **MUST** match its embedded block in `§9` byte-for-byte via SHA-256, `§7.1` **MUST** preserve all twelve (`12` `[MEASURED]`) canonical `ForecastRevision` fields, and `§12.4` **MUST** preserve all ten (`10` `[MEASURED]`) mandatory system telemetry metrics evaluated over the full eligible universe.
 8. **Boundary Purity (Zero GPU / Zero In-Repo Wargame Drift):** No local GPU/CUDA components or in-repo swarm wargame crates may be reintroduced without an explicit major-version architectural ruling; `scripts/verify_plan_hygiene.py` rejects forbidden `fcast-sim` crate rows and accelerator slot tables.
 
 ### §0.8 How Evidence Binds the Plan
@@ -249,6 +249,7 @@ Full storage-tier allocations are detailed in `§19`. Every subsystem runs nativ
 * **`AGOAL-05` (Never Stack 6 Braille Curves in One Shared Cell Grid):** View `[2]` MUST use 6 synchronized small-multiples strips (`§16.1`).
 * **`AGOAL-06` (Never Allow LLM Rubric Arithmetic or Raw Hash Echoing):** Rust owns all sums, rankings, probabilities, and SHA-256 `EvidenceVault` pointers (`INV-06`, `INV-07`).
 * **`AGOAL-07` (Never Expose Destructive Admin Verbs or Bypass Access Controls):** `fcast-mcp` omits `store restore`/secret dumps (`INV-09`), and `SafeExternalFetch` never bypasses CAPTCHAs or paywalls.
+* **`AGOAL-08` (Never Report Investigated-Only Accuracy Without Full-Universe Selection-Bias Accounting):** Evaluating Brier, Log, or Baseline Skill solely on questions the system chose to investigate hides abstention/survivorship bias; every scorecard MUST track the entire eligible universe $\mathcal{U}_{\text{elig}}$, exclusion/abandonment rates, sunk costs, and full-universe imputed scores side-by-side (`INV-13`).
 
 ---
 
@@ -393,13 +394,50 @@ Every Tier-0 tick that crosses the persistence threshold and every completed Tie
 
 ---
 
-## §12. Causal KG, `Crucible` Tournament Engine & Leak-Free `dspy.GEPA` (`KA-07`, `KA-08`)
+## §12. `Crucible`: Meta-Forecasting ("Forecast the Forecasts"), Full-Universe Selection-Bias Ledger, Ten-Metric Scorecard & `dspy.GEPA` (`KA-07`, `KA-08`)
 
-1. **Causal Resolution Knowledge Graph (`fnx-{classes,algorithms,cgse}`):** Maintains `L0_VERIFIED` (`EvidenceVault` facts), `L1_MECHANISM` (causal links), and `L2_SIGNPOST` (observable update triggers ranked by reverse Personalized PageRank to the contract sink).
-2. **`Crucible` (`ForecastBench` Solver & Horizon Evaluation):**
-   * Evaluates and exports tournament submissions strictly via `HorizonForecastView(forecast_id, round_freeze_utc, target_horizon_utc)`, enforcing signed Fréchet bounds on `QuestionId::Combo` pairs, PAV isotonicity exclusively on `CumulativeStoppingTime` horizons, and `<= \$15.00` `[BUDGET]`/round VoI batch routing.
-   * Computes stratified Brier/Log Skill, ECE, and Revision Value Added ($\Delta S_k$) by joining `HorizonForecastView ⋈ QuestionResolution` across TimeSeek lifecycle buckets (`0–20%`, `20–50%`, `50–80%`, `80–100%`) against ForecastBench Superforecaster, Public, and Community medians.
-3. **Air-Gapped `dspy.GEPA` Optimizer:** Optimizes prompts (`model_version`) and calibration parameters (`calibration_version`) using `0..5` `[BUDGET]` `SEIPH` + `CT..PR` critic + proper score on `PurgedChronoSplitter` (`recorded_available_utc <= val_freeze_ts - 48h` `[BUDGET]`), `ReplayAsOf` network air-gap, and `B = 2,000` `[BUDGET]` cluster-stratified paired bootstrap promotion (`p < 0.10` `[TARGET]`).
+### §12.1 Causal Resolution Knowledge Graph (`fnx-{classes,algorithms,cgse}`)
+Maintains `L0_VERIFIED` (`EvidenceVault` facts), `L1_MECHANISM` (causal links), and `L2_SIGNPOST` (observable update triggers ranked by reverse Personalized PageRank to the contract sink).
+
+### §12.2 Pre-Dispatch Meta-Forecasting: Forecasting Cost, Time, Popularity & Complexity (`QuestionMetaForecast`)
+Before spending Tier-1 research compute on any eligible question $q \in \mathcal{U}_{\text{elig}}$, `Crucible` generates and persists an explicit **Meta-Forecast (`QuestionMetaForecast`)** predicting what forecasting $q$ will require and yield (`fcast meta-forecast <question-id> --json`):
+
+1. **Predicted Cost (`est_cost_usd_p50`, `est_cost_usd_p90`):** Empirical-Bayes prediction of initial issuance spend ($\hat{K}(q)$ expected PBM folds × model token/search/audio rates) plus expected cumulative longitudinal revision spend across $T_{\text{close}} - t_{\text{open}}$.
+2. **Predicted Time / Research Latency (`est_latency_sec_p50`, `est_latency_sec_p90`):** Predicted end-to-end wall-clock duration from job dispatch to sealed `InitialForecast` (`seq_no = 0`), decomposing connector/audio/archive I/O wait from LLM reasoning latency.
+3. **Popularity Index (`popularity_score ∈ [0, 100]`):** Quantile-normalized composite of cross-venue volume/open-interest, `L_tob` resting book depth, comment/rationale arrival velocity (`Metaculus`/`Manifold`/`Polymarket`), `ForecastBench` tournament weight, and `GDELT` news velocity—distinguishing heavily arbitraged high-attention questions ($\phi_{\text{liq}}$ high, harder late-stage edge) from neglected, thin, or unpriced high-opportunity questions.
+4. **Forecasting Complexity Index (`complexity_score ∈ [0, 100]`):** Weighted composite of four structural drivers: **(a)** contract & logical arity (`Combo` legs, `Cdf201` interval vs. binary, legalistic clause/exception count), **(b)** information scarcity & right-censoring lag (`Horvitz-Thompson < 0.30`), **(c)** multilingual primary-source or `symphonia` audio requirements, and **(d)** `fnx-*` causal signpost fan-in and domain non-stationarity.
+5. **Closed-Loop Meta-Calibration:** Once $q$ is investigated (or abandoned), `Crucible` logs realized `(actual_cost_usd, actual_latency_sec, realized_fold_count)` against `(est_cost_usd_p50, est_latency_sec_p50)` to continuously recalibrate the meta-forecaster itself.
+
+### §12.3 Full Eligible Universe Census & Anti-Selection-Bias State Machine (`universe_question_ledger`)
+Evaluating only questions the system elects to finish creates severe **selection and survivorship bias**—a system that cherry-picks `20%` easy questions and abandons hard multi-clause contracts mid-flight can display flattering conditional Brier scores while adding near-zero real tournament value (`[MEASURED]` in `scripts/verify_math_and_contracts.py`). `Chronicle` therefore tracks **100% of the eligible question universe**:
+
+* **Irreversible Universe Admission (`INV-13`):** Every discovered contract passing `DomainGate` (plus `100%` of `ForecastBench` round items) enters `universe_question_ledger` with `is_eligible = 1`. A SQLite `BEFORE UPDATE` trigger (`trg_universe_eligible_irreversible`) forbids retroactively flipping `is_eligible` from `1` to `0`—so a difficult question can **never** be erased from the denominator after the fact.
+* **Exhaustive Four-Way Horizon Disposition ($q \in \mathcal{U}_{\text{elig}}(H)$):** At any evaluation cutoff $H$, every eligible question occupies **exactly one** mutually exclusive state:
+  1. **`issued`:** At least one valid `ForecastRevision` exists with `as_of_utc <= H` (`HorizonForecastView::StandingRevision`).
+  2. **`excluded` (`excluded_pre_research`):** Deliberately skipped prior to investigation with mandatory `reason_code ∈ {'low_predicted_voi', 'budget_cap_reached', 'complexity_exceeds_profile', 'missing_connector_key', 'horizon_too_short'}` and frozen `QuestionMetaForecast`.
+  3. **`abandoned` (`abandoned_in_flight`):** Investigation started (`sunk_cost_usd > 0` or `tool_calls > 0`) but terminated without sealing a valid `ForecastRevision` (`reason_code ∈ {'insufficient_evidence', 'fold_budget_exhausted_unsealed', 'tool_timeout_or_error', 'ambiguous_contract_parse'}`), recording exact `sunk_cost_usd` and `sunk_latency_sec`.
+  4. **`queued_missed`:** Admitted before $H$ (`discovered_utc <= H`), still unsealed in `Metronome` at $H$ (counted as an un-issued abstention at $H$).
+* **Explicit Selection-Funnel Rates:** `Crucible` continuously computes **Forecast Coverage Rate** ($|\mathcal{U}_{\text{issued}}| / |\mathcal{U}_{\text{elig}}|$), **Universe Exclusion Rate** ($|\mathcal{U}_{\text{excl}}| / |\mathcal{U}_{\text{elig}}|$), **Universe Abandonment Rate** ($|\mathcal{U}_{\text{aband}}| / |\mathcal{U}_{\text{elig}}|$), and **Attempt Abandonment Rate** ($|\mathcal{U}_{\text{aband}}| / (|\mathcal{U}_{\text{issued}}| + |\mathcal{U}_{\text{aband}}|)$).
+
+### §12.4 The Ten Mandatory System Telemetry & Scorecard Metrics (`Crucible` & `Cockpit`)
+Every benchmark report (`fcast telemetry scorecard --json`), `fcast-mcp` resource (`fcast://universe/scorecard`), and `Cockpit` View `[6:Meta]` tracks all **ten (`10` `[MEASURED]`) mandatory metrics**, reporting accuracy and baseline skill on **both** the investigated subset $\mathcal{R}_{\text{issued}}$ AND the **full resolved eligible universe $\mathcal{R}_{\text{elig}}$** (where un-issued excluded/abandoned/missed questions are imputed under **Uniform Ignorance `0.50` / `1/K`** for raw scores and **Null-Edge `crowd_prior` (`ΔSkill = 0`)** for skill against baselines):
+
+| Metric Key | Mandatory Metric | Exact Mathematical / Operational Definition (`HorizonForecastView ⋈ QuestionResolution`) | Anti-Selection-Bias & Denominator Rule |
+| :--- | :--- | :--- | :--- |
+| `brier_score` | **Brier score** | $\frac{1}{\|\mathcal{R}\|}\sum_{q \in \mathcal{R}} \|p_q(H) - y_q\|^2$ (binary & RPS multiclass) | Reported **side-by-side** for $\mathcal{R}_{\text{issued}}$ AND full $\mathcal{R}_{\text{elig}}$ (imputing `0.50` / `1/K` & `crowd_prior` on excluded/abandoned/missed). |
+| `log_score` | **Log score** | $\frac{1}{\|\mathcal{R}\|}\sum_{q \in \mathcal{R}} \ln p_q(y_q \mid H)$ (`ProbClamped`) | Reported **side-by-side** for $\mathcal{R}_{\text{issued}}$ AND full $\mathcal{R}_{\text{elig}}$ (`ln(0.50) = -0.6931` nats penalty on un-issued binary items). |
+| `calibration_error` | **Calibration error** | Equal-mass adaptive-bin `ECE` + worst-bin `MCE` + Murphy decomposition (`REL`, `RES`, `UNC`) | Computed across `InitialForecast`, `HorizonForecastView(H)`, and full-universe imputed predictions (`ECE < 0.035` `[TARGET]`). |
+| `skill_vs_baselines` | **Skill against human & community baselines** | $\text{BSS}_{\text{base}} = 1 - \frac{\overline{\text{BS}}_{\text{fcast}}}{\overline{\text{BS}}_{\text{base}}}$ & $\Delta\overline{\text{LS}}$ vs. `ForecastBench` Superforecaster, Public, Community, & `p_micro` | Full-universe $\text{BSS}_{\text{univ}}$ sets `p_fcast = p_base` (`0.000` skill edge) on every excluded/abandoned/missed $q \in \mathcal{R}_{\text{elig}} \setminus \mathcal{R}_{\text{issued}}$! |
+| `cost_per_forecast` | **Cost per forecast** | $\frac{\sum_{q \in \mathcal{U}_{\text{issued}}} C_{\text{total}}(q)}{\|\mathcal{U}_{\text{issued}}\|}$ (mean & `p50`/`p90` USD) | Reported both for initial issuance (`seq_no = 0`) and cumulative lifecycle spend (`seq_no = 0..K`). |
+| `cost_per_resolved_forecast` | **Cost per resolved forecast** | $\frac{\sum_{q \in \mathcal{U}_{\text{elig}}} C_{\text{total}}(q)}{\|\mathcal{R}_{\text{issued}}\|}$ (USD / resolved forecast) | **Numerator includes `100%` of sunk spend on `abandoned`, triage, voided, and unresolved-cohort overhead**—exposing wasted compute! |
+| `research_latency` | **Research latency** | Quantiles (`p50`, `p90`, `p99` seconds) of `sealed_at_utc - dispatched_at_utc` | Tracked separately for Tier-0 stream ticks, Tier-1 `InitialForecast` folds, and `abandoned` time-to-abort. |
+| `forecast_coverage` | **Forecast coverage** | $\frac{\|\mathcal{U}_{\text{issued}}(H)\|}{\|\mathcal{U}_{\text{elig}}(H)\|}$ (`0%..100%`), paired with `Excluded %` & `Abandoned %` | Denominator is strictly the **irreversible full eligible universe** $\mathcal{U}_{\text{elig}}(H)$ (`trg_universe_eligible_irreversible`). |
+| `pct_forecasts_revised` | **Percentage of forecasts revised** | $\frac{\|\{f \in \mathcal{U}_{\text{issued}} : \max \text{seq\_no}(f) \ge 1\}\|}{\|\mathcal{U}_{\text{issued}}\|} \times 100\%$ | Distinguishes active longitudinal belief maintenance from fire-and-forget static issuance. |
+| `pct_revisions_improving_score` | **Percentage of revisions improving final score** | Stepwise $\Pr[S(R_{f,k}, y_f) > S(R_{f,k-1}, y_f)]$ AND net $\Pr[S(R_{f,\text{final}}, y_f) > S(R_{f,0}, y_f)]$ | Evaluated on all resolved revised streams $\mathcal{R}_{\text{revised}}$ under both Brier and Log score (`> 55%` `[TARGET]` net hit rate; flags churn if `<= 50%`). |
+
+### §12.5 `ForecastBench` Solver & Air-Gapped `dspy.GEPA` Optimizer
+* Enforces signed Fréchet bounds on `QuestionId::Combo` pairs, PAV isotonicity exclusively on `CumulativeStoppingTime` horizons, and `<= \$15.00` `[BUDGET]`/round VoI batch routing informed by `QuestionMetaForecast` (`Predicted Edge / est_cost_usd_p50`).
+* Optimizes prompts (`model_version`) and calibration (`calibration_version`) via `PurgedChronoSplitter` (`recorded_available_utc <= val_freeze_ts - 48h` `[BUDGET]`), `ReplayAsOf` air-gap, and `B = 2,000` `[BUDGET]` paired bootstrap promotion (`p < 0.10` `[TARGET]`) evaluated strictly on **full-universe `BSS_univ`** so `GEPA` cannot game scores by learning to abstain!
 
 ---
 
@@ -427,10 +465,10 @@ flowchart LR
 ## §14. `Tether`: First-Class MCP Server, Skills & Sister-Project Read Contract (`INT-03`, `INT-04`, `INT-06`)
 
 1. **Hardened MCP Transports (`fcast-mcp`):** `stdio` quarantines FD `1` via `dup(1)`/`dup2(2, 1)` on startup (`INV-08`); loopback Streamable HTTP (`127.0.0.1:7420` `[BUDGET]`) enforces `Authorization: Bearer` and strict `Origin`/`Host` DNS-rebinding checks.
-2. **Synchronous Epistemic Tools, Async Job Handles & `ForecastRevision` Resources:**
-   * **Synchronous Tools (`<= 2 s` `[BUDGET]`, `as_of_utc` + `blind: bool`):** `fcast_list_questions`, `fcast_get_revision`, `fcast_project_horizon`, `fcast_list_revisions`, `fcast_compare_cluster`, `fcast_top_rationales`, `fcast_kg_query`, `fcast_datapack_query`, `fcast_verify_event`, `fcast_belief_fold`, `fcast_rubric_score`.
+2. **Synchronous Epistemic Tools, Async Job Handles & `ForecastRevision` / Universe Resources:**
+   * **Synchronous Tools (`<= 2 s` `[BUDGET]`, `as_of_utc` + `blind: bool`):** `fcast_list_questions`, `fcast_meta_forecast`, `fcast_universe_scorecard`, `fcast_get_revision`, `fcast_project_horizon`, `fcast_list_revisions`, `fcast_compare_cluster`, `fcast_top_rationales`, `fcast_kg_query`, `fcast_datapack_query`, `fcast_verify_event`, `fcast_belief_fold`, `fcast_rubric_score`.
    * **Async `Metronome` Job Tools (`< 15 ms` `[TARGET]` handle return):** `fcast_job_enqueue` (`deep_research`, `podcast_transcribe`, `multi_fold_solve`, `rationale_batch`, `table_map`), `fcast_job_status`, and `fcast_job_cancel` with `notifications/progress` streaming.
-   * **Subscribable `fcast://` Resources:** `fcast://forecasts/{forecast_id}/revisions/{rev_or_latest}`, `fcast://forecasts/{forecast_id}/horizon?as_of={utc}`, `fcast://questions/{id}/resolution`, `fcast://questions/{id}/rationales`, `fcast://clusters/{id}/bitemporal`, and `fcast://jobs/{id}`.
+   * **Subscribable `fcast://` Resources:** `fcast://universe/scorecard`, `fcast://questions/{id}/meta-forecast`, `fcast://forecasts/{forecast_id}/revisions/{rev_or_latest}`, `fcast://forecasts/{forecast_id}/horizon?as_of={utc}`, `fcast://questions/{id}/resolution`, `fcast://questions/{id}/rationales`, `fcast://clusters/{id}/bitemporal`, and `fcast://jobs/{id}`.
 3. **Sister-Project Boundary (`INT-06` — `franken_wargame`):** External `franken_wargame` connects strictly as an untrusted read-only MCP/Parquet consumer reading sealed `ForecastRevision` priors and `L0..L2` KG snapshots; `fcast-mcp` exposes zero tools capable of injecting synthetic wargame outputs into `EvidenceVault` or `forecast_revisions`.
 4. **Target-Compiled Skills & `Hermes` Gate:** Static-lints compiled skills (`pi_agent_rust`, `Hermes`, `Antigravity`) against `` !`cmd` `` injection and installs `$HERMES_HOME/scripts/fcast_shock_gate.sh` (`6 h` `[BUDGET]` cooldown + `0.35` `[BUDGET]` logit hysteresis).
 
@@ -443,14 +481,39 @@ flowchart LR
 
 ---
 
-## §16. `Cockpit`: `FrankenTUI` 7-View Architecture, Revision Ledger & Atomic PTY Handoff (`KA-09`)
+## §16. `Cockpit`: `FrankenTUI` 7-View Architecture, `[6:Meta]` "Forecast the Forecasts" Pane & Atomic PTY Handoff (`KA-09`)
 
 1. **Seven Specialized Terminal Views (`1–7`):**
-   * **View `[1]` (Markets, Rationales & Active Belief Cockpit):** Fenwick-virtualized contract table (`24h` + `7d` cadence-encoded deltas), `<= 3`-curve `[BUDGET]` Braille chart (`p_market`, `SF/Community Median`, `p_indep` / `probability_distribution`), Bi-Temporal `△/⚡/★/◆` track, Top-$N$ `6D+2G` rationales, and `fnx-*` cruxes.
+   * **View `[1]` (Markets, Rationales & Active Belief Cockpit):** Fenwick-virtualized contract table (`24h` + `7d` cadence-encoded deltas), `<= 3`-curve `[BUDGET]` Braille chart (`p_market`, `SF/Community Median`, `p_indep` / `probability_distribution`), Bi-Temporal `△/⚡/★/◆` track, Top-$N$ `6D+2G` rationales, `fnx-*` cruxes, and `[M]` quick Meta-Forecast badge.
    * **View `[2]` (`6`-Strip Synchronized Comparison Matrix):** Up to `6` `[BUDGET]` separate 3-row Braille tracks locked to one shared `h`/`l` crosshair (`0` `[MEASURED]` cell color collisions) + `[p]` 2-venue spread overlay.
-   * **Views `[3]`–`[6]`:** `[3]` News/Podcast Catalyst Stream · `[4]` 3-Pane `fnx-*` KG & Contradiction Ledger · `[5]` Shock Alerts & Calibration · `[6]` `ForecastBench` & `DataPack` Workbench.
-   * **View `[7]` (`ForecastRevision` & Horizon-Evaluation Audit Ledger):** Scrub through `InitialForecast` (`seq_no = 0`) → `SubsequentRevision` (`seq_no = 1..k`), inspect side-by-side diffs of `p_indep` vs. `p_market`, `evidence_handles`, `model_version`, `calibration_version`, and `HorizonForecastView` slices (`T-90d`, `T-30d`, `freeze`, `QuestionResolution` Brier/Log post-mortem).
-2. **Atomic 4-Phase `[H]` PTY Harness Handoff:** Checkpoints WAL (`PASSIVE`) + verifies `O_CLOEXEC` → drops `TerminalSession` (`AltScreen` exit) → runs `pi_agent_rust`, `Hermes`, or `agy` seeded with the current `ForecastRevision` + `ee pack` → refreshes snapshots and repaints `100%` `[TARGET]` of cells in `< 50 ms` `[TARGET]`.
+   * **Views `[3]`–`[5]`:** `[3]` News/Podcast Catalyst Stream · `[4]` 3-Pane `fnx-*` KG & Contradiction Ledger · `[5]` Shock Alerts, `DataPack` Vintages & Sentinel Ledger.
+   * **View `[6:Meta]` ("Forecast the Forecasts" Triage & Selection-Bias-Free Universe Scorecard):** Dedicated split cockpit forecasting the operational cost, latency, popularity, and complexity of every eligible question while tracking the entire eligible universe (`Issued` vs. `Excluded` vs. `Abandoned`) and all `10` `[MEASURED]` mandatory system metrics side-by-side:
+
+```text
+┌─ fcast [6:Meta · Forecast the Forecasts & Universe Scorecard] ── Round: All+FB │ Horizon: [freeze ▾] │ ⚙Daemon: ON ─┐
+│ ELIGIBLE UNIVERSE FUNNEL (N_elig = 1,240 · Irreversible Admission · Zero Cherry-Pick Reporting)                     │
+│  ■ Issued Coverage: 78.4% (972)  │ ▨ Excluded Pre-Run: 16.5% (205) │ ✖ Abandoned In-Flight: 3.8% (47, $6.12 sunk)   │
+│  ⧗ Queued/Missed:    1.3% ( 16)  │ Attempt Abandon Rate: 4.6%      │ Meta-Cal MAE: Cost ±$0.018 · Time ±6.4s        │
+├───────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────┤
+│ FORECAST THE FORECASTS (All N_elig=1,240 · [f] Filter)    │ 10-METRIC SCORECARD (Investigated vs Full-Univ Imputed) │
+│ Question                  Est$  EstT  PopΠ CplxΞ Status   │ Metric                        Investigated   Full-Univ  │
+│ ▸ EU Grid Cyber Q1       $0.09   38s   24   82  ISSUED    │ 1. Brier Score (↓)                  0.118       0.146   │
+│   Baltic Cable Attribution$0.14  64s   61   89  ABANDONED │ 2. Log Score (↑ nats)              -0.362      -0.439   │
+│   Hormuz Closure >48h    $0.07   29s   94   58  ISSUED    │ 3. Calibration Error (ECE / MCE)    0.021   0.029/0.061 │
+│   BOJ +25bps Jan         $0.04   16s   79   34  ISSUED    │ 4. Skill vs SF / Comm (BSS)   +7.4%/+11.2%  +5.8%/+8.8% │
+│   Mercosur Ratify 5-Leg  $0.22  110s   19   95  EXCL:VoI  │ 5. Cost / Forecast (init / cum)    $0.052      $0.084   │
+│                                                           │ 6. Cost / Resolved Forecast*       $0.149  (incl sunk!) │
+│ Selected: Baltic Cable Attribution [ABANDONED:InuffEv]    │ 7. Research Latency (p50 / p90)     26.4s       61.8s   │
+│ • Est vs Realized: Est $0.14 / 64s │ Sunk $0.11 / 58s     │ 8. Forecast Coverage (Issued/Elig)     —        78.4%   │
+│ • Complexity Ξ=89: Multi-actor(92) · Lag<0.30(88) · Audio │ 9. % Forecasts Revised (seq>=1)     64.2%       50.3%   │
+│ • Popularity Π=61: $410k Vol · 38 Rationales · 19 Wires   │ 10.% Revisions Improving Final  61.8% net (57.9% step)  │
+├───────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────┤
+│ [j/k] Question [s] Sort(Edge/$|Cplx|Pop) [u] Toggle Imputation(Crowd/0.50) [h] Horizon [Enter] Dispatch/Inspect     │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+   * **View `[7:Revisions]` (`ForecastRevision` & Horizon-Evaluation Audit Ledger):** Scrub through `InitialForecast` (`seq_no = 0`) → `SubsequentRevision` (`seq_no = 1..k`), inspect side-by-side diffs of `p_indep` vs. `p_market`, `evidence_handles`, `model_version`, `calibration_version`, and `HorizonForecastView` slices (`T-90d`, `T-30d`, `freeze`, `QuestionResolution` Brier/Log post-mortem).
+2. **Atomic 4-Phase `[H]` PTY Harness Handoff:** Checkpoints WAL (`PASSIVE`) + verifies `O_CLOEXEC` → drops `TerminalSession` (`AltScreen` exit) → runs `pi_agent_rust`, `Hermes`, or `agy` seeded with the current `ForecastRevision` + `QuestionMetaForecast` + `ee pack` → refreshes snapshots and repaints `100%` `[TARGET]` of cells in `< 50 ms` `[TARGET]`.
 
 ---
 
@@ -466,7 +529,7 @@ Every PR verifies `rank(dep) < rank(pkg)` via `cargo metadata` (`0` `[TARGET]` c
 | `fcast-infra` | `L1` | `fcast-core` | `Chronicle` (`store`, `forecast_revisions`/`question_resolutions`, `vault`, Parquet, `ee`), `Metronome` `DurableJobStore`, `SafeExternalFetch`, `LlmRouter`, `Frankensearch` | `<= 7,500 LOC` `[BUDGET]` |
 | `fcast-ingest` | `L2` | `core`, `infra` | `Harvester` connectors, `BookMarkPrice`, `ForecastBench` medians, `question_data_packs`, `DomainGate`, `sentinel_alert_ledger` | `<= 7,000 LOC` `[BUDGET]` |
 | `fcast-epistemic` | `L3` | `core`, `infra`, `ingest` | `Notary` (`verify`, `rationales`), `Loom` (`fnx-*` KG, Two-Speed `belief`, `2610.04798` cyber, `ops` emitting `ForecastRevision`) | `<= 8,000 LOC` `[BUDGET]` |
-| `fcast-bench` | `L4` | `core`, `infra`, `ingest`, `epistemic` | `Crucible` (`HorizonForecastView` solver, Fréchet/PAV, TimeSeek checkpoints `⋈ QuestionResolution`, `PurgedChronoSplitter`, `ReplayAsOf`) | `<= 4,800 LOC` `[BUDGET]` |
+| `fcast-bench` | `L4` | `core`, `infra`, `ingest`, `epistemic` | `Crucible` (`QuestionMetaForecast`, `universe_question_ledger` 10-metric scorecard, Fréchet/PAV, `PurgedChronoSplitter`, `ReplayAsOf`) | `<= 5,400 LOC` `[BUDGET]` |
 | `fcast-app` | `L5` | `core`, `infra`, `ingest`, `epistemic`, `bench` | Binary entrypoints: `Metronome` (`daemon`), `Tether` (`mcp`, `skills`), `Cockpit` (`tui`, `cli`, `onboard`, `verify`) | `<= 7,500 LOC` `[BUDGET]` |
 
 ---
@@ -515,6 +578,7 @@ With `0` GB wasted on local GPU LLM weights, the full `4 TB` NVMe drive is dedic
   * `INV-10`: `FoldStoppingController` forbids stopping while `fold_count < 2` or `productive_folds < 2` (unless `spent_usd >= hard_budget_usd`).
   * `INV-11`: `100%` of `fcast-*` crates compile and pass `GATE-01..24` on pure CPU with `0` GPUs and `0` C++/CUDA FFI crates.
   * `INV-12`: Every schema migration runs only after a verified `PRAGMA integrity_check == "ok"` online `zstd` WAL backup.
+  * `INV-13`: `universe_question_ledger` admission (`is_eligible = 1`) is irreversible via SQLite trigger, and every accuracy/skill scorecard computes full-universe imputed metrics alongside investigated-only metrics.
 
 ---
 
@@ -549,11 +613,11 @@ Per `§0.7` Rule 6, **every gate maps to exactly one primary `CLAIM-XX`**, and e
 | `GATE-15` | `CLAIM-05` | `SUB-03` | `rationale_gold_panel_agreement.rs` | Staged-reveal `6D+2G` achieves Spearman rank correlation `ρ >= 0.70` `[TARGET]` against `50` `[BUDGET]` human-annotated rationales. |
 | `GATE-16` | `CLAIM-06` | `SUB-04` | `conjugate_stream_decay_and_shock_reset.rs` | Proves `"Still"` invariance (`Δμ = 0` `[MEASURED]`), `0.80 + Up` monotonicity (`[MEASURED]`), `CumulativeStoppingTime` hazard contraction, and `> 4×` `[MEASURED]` shock variance expansion. |
 | `GATE-17` | `CLAIM-06` | `SUB-04` | `fold_stopping_and_cyber_prior_shift.rs` | Proves `fold_count < 2` never seals (`[MEASURED]`), fat-tail `KL >= 0.50` `[BUDGET]` cruxes continue, and King-Zeng `2610.04798` cyber calibrator hits `ECE < 0.005` `[TARGET]`, `BSS > 0.08` `[TARGET]`. |
-| `GATE-18` | `CLAIM-06` | `SUB-05` | `forecastbench_frechet_budget_and_gepa.rs` | Full `~1,000`-question `[UPSTREAM-SPEC]` round passes Fréchet/PAV checks under `<= \$15.00` `[BUDGET]`; `PurgedChronoSplitter` blocks `< 48 h` `[BUDGET]` overlap & `B = 2,000` `[BUDGET]` noisy promotions. |
+| `GATE-18` | `CLAIM-06` | `SUB-05` | `universe_selection_bias_ten_metrics_and_gepa.rs` | Irreversible `universe_question_ledger` (`[MEASURED]`), all `10` `[MEASURED]` metrics (`cost_per_resolved_forecast` incl. sunk spend, revision hit rate, full-universe `BSS_univ`), Fréchet/PAV under `<= \$15.00` `[BUDGET]`, & `GEPA` split firewall pass. |
 | `GATE-19` | `CLAIM-07` | `SUB-06` | `daemon_singleton_lease_and_budget_breaker.rs` | `O_CLOEXEC` `flock` blocks duplicate `fcastd`; `SIGKILL` lease recovery + `BLAKE3` idempotency + `\$5.00/day` `[BUDGET]` circuit breaker pass (`[MEASURED]`). |
 | `GATE-20` | `CLAIM-07` | `SUB-07` | `mcp_stdio_http_and_async_jobs.rs` | `stdio` FD quarantine preserves `100%` `[TARGET]` JSON-RPC framing under forced `println!`; `fcast_job_enqueue` returns handle in `< 15 ms` `[TARGET]`; `0` `[BUDGET]` wargame write verbs exposed. |
 | `GATE-21` | `CLAIM-07` | `SUB-07` | `skill_security_linter_and_transcribe_stitch.rs` | Static linter blocks `100%` `[TARGET]` of `` !`cmd` `` / invisible-Unicode payloads; `68 min` `[BUDGET]` MP3 `symphonia` stitch leaves `0` `[TARGET]` orphaned cloud files. |
-| `GATE-22` | `CLAIM-08` | `SUB-08` | `tui_frame_latency_and_braille_separation.rs` | Headless `FrankenTUI` renders `2,000` `[BUDGET]` contracts + View `[7:Revisions]` at `< 8.0 ms` `[TARGET]` p99 frame time with `0` `[TARGET]` multi-curve Braille cell collisions. |
+| `GATE-22` | `CLAIM-08` | `SUB-08` | `tui_frame_latency_meta_and_braille_views.rs` | Headless `FrankenTUI` renders `2,000` `[BUDGET]` contracts across Views `[1..7]` (incl. `[6:Meta]` & `[7:Revisions]`) at `< 8.0 ms` `[TARGET]` p99 with `0` `[TARGET]` Braille collisions. |
 | `GATE-23` | `CLAIM-08` | `SUB-08` | `pty_handoff_roundtrip.rs` | `50` `[BUDGET]` consecutive `[H]` PTY handoff cycles record `0` `[TARGET]` stolen keystrokes, `0` `[TARGET]` leaked FDs, and `< 50 ms` `[TARGET]` repaint. |
 | `GATE-24` | `CLAIM-08` | `SUB-08` | `zero_key_quickstart_onboarding.rs` | Clean-home `fcast init && fcast sync` populates multi-venue curves + `ForecastBench` medians in `< 60 s` `[TARGET]` with `0` `[BUDGET]` API keys. |
 
@@ -572,6 +636,7 @@ Per `§0.7` Rule 6, **every gate maps to exactly one primary `CLAIM-XX`**, and e
 | `RISK-07` | macOS `TMPDIR` path length exceeds `104`-byte Unix Domain Socket `sun_path` limit. | Medium | Bind macOS UDS at `/tmp/fcast-<uid>/d.sock` (`<= 36` `[DERIVED]` bytes) verified in `GATE-19`. |
 | `RISK-08` | Malicious RSS/comment text attempts prompt injection during `Notary` / `Loom` runs. | High | Structural delimiters, zero shell-tool access inside judges, `MarketBlindingScrubber`, and static skill linter (`GATE-21`). |
 | `RISK-09` | `gemini-3.5-transcribe` silently truncates timestamps past `30 min` on long podcasts. | Medium | `symphonia` packet-aligned `24 min` `[BUDGET]` chunking with `15 s` overlap + 5-gram LCS stitch (`GATE-21`). |
+| `RISK-10` | Cherry-picking easy contracts or dropping mid-flight failures inflates apparent Brier/Log Skill via selection bias. | Critical | Irreversible `universe_question_ledger` (`INV-13`) + dual Investigated vs. Full-Universe imputed 10-metric scorecard + sunk-cost accounting in `cost_per_resolved_forecast` (`GATE-18`). |
 
 ---
 
