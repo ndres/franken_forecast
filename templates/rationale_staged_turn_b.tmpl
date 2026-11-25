@@ -1,0 +1,18 @@
+Turn A price-blind dimension scores are now locked and immutable:
+{locked_turn_a_json}
+
+Now reveal the pricing context strictly as of as_of_utc = {as_of_utc}:
+- Forecaster submitted probability_distribution: {forecaster_probability_distribution}
+- Reference market / community prior at cutoff (p_market, source = {p_market_source}): {p_market}
+
+Complete Turn B under zero-hindsight discipline (do NOT use any knowledge after {as_of_utc} and do NOT compute dimension sums):
+1. Score pr (Pricing, integer 0..4 using the 0=absent, 1=gestural, 2=generic, 3=specific, 4=exemplary anchors):
+   - (a) Coherence vs. p_market: Is deviation from p_market, or deference to p_market, justified with explicit reasons? Unexplained herding or unexplained extreme divergence scores low.
+   - (b) Internal coherence vs. rationale_text: Do the uncertainties and mechanisms named in Turn A actually move forecaster_probability_distribution?
+2. Evaluate binary disqualifying/capping gates (booleans):
+   - g1 (Load-bearing contract misread): true iff the rationale's quantitative conclusion rests on misreading resolution_criteria (wrong metric, wrong deadline, inverted direction, excluded actor).
+   - g2 (Epistemic integrity / post-cutoff violation): true iff rationale_text cites information with published_utc or available_utc > {as_of_utc}, or relies on a decisively fabricated factual claim.
+3. Write note: 1-2 crisp sentences justifying pr and mandatory whenever g1 = true or g2 = true.
+
+Reply with ONLY one JSON object, echoing the locked Turn A integers unchanged:
+{"question_id": "{question_id}", "rationale_handle": "{rationale_handle}", "as_of_utc": "{as_of_utc}", "ct": {ct}, "ei": {ei}, "ov": {ov}, "me": {me}, "ej": {ej}, "pr": 0, "g1": false, "g2": false, "unscoreable": false, "note": "..."}

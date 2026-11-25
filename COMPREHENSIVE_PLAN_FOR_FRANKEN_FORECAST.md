@@ -1,8 +1,8 @@
 # COMPREHENSIVE PLAN FOR FRANKENFORECAST (`fcast`)
 
 * **Repository:** `franken_forecast`
-* **Master Plan Version:** `1.3` (`2026-11-25`)
-* **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract, `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 formal specification draft (`lean_experiments/`), full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite WAL/backup/migration triggers, rationale staging, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`)
+* **Master Plan Version:** `1.4` (`2026-11-25`)
+* **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract, 8-template SHA-256-locked prompt suite (`templates/*.tmpl`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 formal specification draft (`lean_experiments/`), full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite WAL/backup/migration triggers, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`)
 * **Core Instruments:** `fcast` (Core CLI), `fcastd` (`Asupersync` Job Daemon), `fcast-mcp` (Model Context Protocol Server), `fcast-verify` (Offline Receipt & Temporal-Fence Auditor), `fcast-tui` (`FrankenTUI` Terminal Cockpit)
 * **Companion Sister Project (External):** `franken_wargame` (separate multi-agent geopolitical wargaming repository consuming `franken_forecast` strictly via read-only MCP/Parquet snapshots; `0` write coupling)
 * **Target Hardware & OS Envelope:** CPU-complete pure Rust (`0` `[BUDGET]` GPUs) on **macOS 15+ (`aarch64` Apple Silicon)** and **Linux 6.1+ (`x86_64` / `aarch64`)**, backed by **4 TB (`4,000 GB` `[BUDGET]`) NVMe SSD** tiered storage
@@ -34,7 +34,7 @@ Subsystem and gate maturity are tracked exclusively in `docs/delivery/DELIVERY_L
 
 ### §0.2 What "Implemented" Means
 
-Nothing in this repository's Rust crate graph is implemented as of `Plan v1.3` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
+Nothing in this repository's Rust crate graph is implemented as of `Plan v1.4` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
 
 1. **Zero Stubs & Strict Toolchain:** Compiles cleanly under `nightly-2026-11-01` (Rust Edition 2024 `[UPSTREAM-SPEC]`) with `#![deny(clippy::todo, clippy::unimplemented, clippy::unwrap_used)]` and `#![forbid(unsafe_code)]` outside the audited `<= 120` `[BUDGET]` LOC POSIX FD/lock module (`fcast-infra::sys`).
 2. **Dependency Hygiene:** Passes `cargo deny check bans advisories licenses sources` with singleton `asupersync` (`0` `[BUDGET]` instances of `tokio`, `reqwest`, `hyper`, `ort`, `openssl-sys`, `rusqlite`, `sqlx`, `petgraph`, or C++/GPU FFI crates).
@@ -103,7 +103,7 @@ The following eight (`8` `[MEASURED]`) hygiene rules govern all edits to this re
 4. **Line Counts Are Scope Caps, Never Schedules:** Crate LOC figures in `§17` carry `[BUDGET]` tags strictly as complexity ceilings triggering module review if exceeded—**NEVER** as output targets or schedules.
 5. **Universal Evidence Labeling:** Every numeric metric in hardware/storage tables (`§5`, `§19`), crate scope caps (`§17`), and validation gates (`§22`) **MUST** carry an explicit `§0.1` evidence tag. Unlabeled numbers fail CI.
 6. **Strict Claim-Boundary Bijection:** The eight (`8` `[MEASURED]`) core project claims (`CLAIM-01` .. `CLAIM-08`) **MUST NEVER** be conflated. In `§22`, every `GATE-XX` row **MUST** map to **exactly one** primary `CLAIM-XX`, and every `CLAIM-XX` **MUST** be tested by at least two (`2` `[BUDGET]`) independent gates.
-7. **Frozen Verbatim Prompt, Canonical Revision & 10-Metric Universe Integrity:** `templates/bitemporal_event_audit.tmpl` **MUST** match its embedded block in `§9` byte-for-byte via SHA-256, `§7.1` **MUST** preserve all twelve (`12` `[MEASURED]`) canonical `ForecastRevision` fields, and `§12.4` **MUST** preserve all ten (`10` `[MEASURED]`) mandatory system telemetry metrics evaluated over the full eligible universe.
+7. **Frozen Verbatim Prompt Suite, Canonical Revision & 10-Metric Universe Integrity:** All eight (`8` `[MEASURED]`) prompt templates in `templates/*.tmpl` **MUST** match their SHA-256 digests in `§9.2`, `templates/bitemporal_event_audit.tmpl` **MUST** match its embedded block in `§9.1` byte-for-byte, `§7.1` **MUST** preserve all twelve (`12` `[MEASURED]`) canonical `ForecastRevision` fields, and `§12.4` **MUST** preserve all ten (`10` `[MEASURED]`) mandatory system telemetry metrics evaluated over the full eligible universe.
 8. **Boundary Purity (Zero GPU / Zero In-Repo Wargame Drift):** No local GPU/CUDA components or in-repo swarm wargame crates may be reintroduced without an explicit major-version architectural ruling; `scripts/verify_plan_hygiene.py` rejects forbidden `fcast-sim` crate rows and accelerator slot tables.
 
 ### §0.8 How Evidence Binds the Plan
@@ -327,48 +327,63 @@ To guarantee bit-exact historical replay, leak-free `calibration_version` ablati
 
 ---
 
-## §9. Verbatim Bi-Temporal Event Verification (`KA-03` · `Notary`)
+## §9. Bi-Temporal Event Verification & Canonical Prompt Template Suite (`KA-03` · `templates/*.tmpl`)
 
-`templates/bitemporal_event_audit.tmpl` is **Verbatim Locked** (`§0.7` Rule 7) with exact SHA-256 digest `6109ee958fe61395e7c9335576a788a240d2bc2df692d0615c9e43f478dda408` `[MEASURED]`. `{markets}` expands to 1-indexed venue rule blocks, `{hint}` injects the union-strictness & nullability invariant (*`satisfies_rules = true` iff the item satisfies $\ge 1$ listed market; `first_public = null` when zero items qualify*), and `ValidatedBiTemporalAudit` joins each venue $m$'s Parquet/SQLite ticks against `per_market[m].first_qualifying_published_utc` as `[HH:MM:00Z, HH:MM:59.999Z]` intervals:
+Every LLM boundary across `Notary`, `Loom`, `Crucible`, and `Chronicle` is backed by a committed, SHA-256-locked `.tmpl` artifact in `templates/` whose digest is stamped directly into `ForecastRevision.model_version` (`e.g. gemini-4-argon@2026-05-20+tmpl:da7f1f34`) and audited by `scripts/verify_plan_hygiene.py`.
+
+### §9.1 Verbatim Bi-Temporal Event Audit Template (`templates/bitemporal_event_audit.tmpl`)
+
+Revised to bind the exact canonical identifiers from `§3` Principle 5, `§7.1` (`ForecastRevision`), and `§7.2` (`QuestionResolution` — `as_of_utc`, `event_utc`, `published_utc`, `available_utc`, `question_id`, `resolution_status`, `resolved_published_utc`, `adjudication_ev_handle`, and `ev_handle`). Locked with SHA-256 digest `362d5386c85123d3fd491ee7d20da87c6055fa944a7b138253fc7d214b5d1f52` `[MEASURED]`:
 
 ```text
-Event (description ): {event}
-Approximate date (UTC): {date}
-Prediction markets resolved by this event, with their rules (they define exactly what must have happened):
-{markets}
-Two different times matter, never mix them:
-- published_utc: when a post / statement / broadcast / article became visible to the public;
-- event_utc: when the thing itself happened, as described by a source (e.g. "the strikes began at 22:40 GMT" written in a later article is an event time, NOT a
-publication time).
+Event description: {event_description}
+Approximate event window (UTC): {approx_event_utc}
+Information cutoff (as_of_utc — NEVER use any source, edit, or archive capture with available_utc > as_of_utc): {as_of_utc}
+Forecasted questions and resolution contracts (question_id, venue, contract_sha256, and exact rules):
+{question_contracts}
+Vaulted candidate evidence handles (ev_handle in [ev:sha256#span] with recorded available_utc <= as_of_utc):
+{evidence_handles_context}
+
+Three distinct timestamps govern bi-temporal and replay integrity — NEVER mix them:
+- event_utc: when the physical or institutional action itself happened as described by a source (e.g. "the strikes began at 22:40 GMT" in a later article is event_utc, NOT published_utc).
+- published_utc: when a post, official statement, broadcast, or wire flash first became visible to the public (maps to QuestionResolution.resolved_published_utc when rule-satisfying).
+- available_utc: when that exact version/capture was archived or ingested into EvidenceVault (maps to QuestionResolution.recorded_available_utc; MUST satisfy available_utc <= as_of_utc).
+
 Rules for judging:
-- satisfies_rules = true only if that item itself reports the event HAS happened AND meets the specific market rule (e.g. "missiles launched" does not satisfy "
-missiles entered Israeli airspace"; "talks scheduled" does not satisfy "met in person"; "deal close" does not satisfy "agreement reached").
-- Consider ANY party involved: leaders' posts (Truth Social, X, Telegram), governments, militaries, state media of either side, mediators, live TV, wire flashes (
-Reuters/AP/AFP/Yonhap/etc.), local media in any language.
-- For every time, state timestamp_basis: "page shows time with timezone", "page shows time, timezone inferred (say how)", "metadata/JSON-LD", "archive capture", "URL
-", or "other". Convert to UTC carefully.
-- If a wire or news report says someone "said", "announced", "posted" or "confirmed" it (e.g. "Israel said it launched an attack", "Trump announced on Truth Social"),
-that original statement is usually earlier than the report: find the original post / statement / broadcast itself and its own time (the official's X or
-Telegram account, the ministry or military spokesperson channel, the live TV moment), including sources in Hebrew, Arabic, Persian, Russian, Ukrainian, Korean,
-etc. List both.
-- Screenshots and reposts of social posts often show the viewer's local time without a timezone: only use such a time if the timezone can be established; otherwise
-use a source with an explicit timezone.
-- If a page was updated later, say whether the quoted text was in the first version.
-- If you cannot find something, use null. Never guess.
-{hint}
+- satisfies_rules = true for a question_id ONLY if that item itself reports the event HAS happened AND meets that question_id's specific contract rules (e.g. "missiles launched" does not satisfy "missiles entered Israeli airspace"; "talks scheduled" does not satisfy "met in person"; "deal close" does not satisfy "agreement reached").
+- Consider ANY party involved: leaders' posts (Truth Social, X, Telegram), governments, militaries, state media of either side, mediators, live TV, wire flashes (Reuters/AP/AFP/Yonhap/etc.), local media in any language.
+- For every timestamp, state timestamp_basis: "page shows time with timezone", "page shows time, timezone inferred (say how)", "metadata/JSON-LD", "archive capture", "URL", or "other". Convert to UTC carefully.
+- If a wire or news report says someone "said", "announced", "posted" or "confirmed" it (e.g. "Israel said it launched an attack", "Trump announced on Truth Social"), that original statement is usually earlier than the report: find the original post / statement / broadcast itself and its own published_utc (the official's X or Telegram account, the ministry or military spokesperson channel, the live TV moment), including sources in Hebrew, Arabic, Persian, Russian, Ukrainian, Korean, etc. List both.
+- Screenshots and reposts of social posts often show the viewer's local time without a timezone: only use such a time if the timezone can be established; otherwise use a source with an explicit timezone.
+- If a page was updated later, state first_version_verified (true/false/null) indicating whether the quoted text was in the initial version prior to as_of_utc.
+- Bind ev_handle ("[ev:sha256#span]") whenever citing a vaulted source; if no vaulted or verifiable public source exists <= as_of_utc, use null. Never guess.
+{union_strictness_hint}
 Reply with ONLY one JSON object, no other text:
-{"items": [{"published_utc": "YYYY-MM-DD HH:MM", "shown_time": "...", "timezone": "...", "timestamp_basis": "...", "event_utc": "... or null", "who_or_outlet": "...",
-"source_type": "leader post|official statement|state media|TV|wire flash|news article|other", "language": "...", "what": "one sentence", "satisfies_rules":
-true/false, "url": "...", "quote": "exact sentence or timestamp line"}],
-"first_public": {"published_utc": ..., "who_or_outlet": ..., "source_type": ..., "url": ..., "quote": ..., "timestamp_basis": ...},
-"second_source": {"published_utc": ..., "who_or_outlet": ..., "url": ..., "quote": ...},
-"earlier_signals": [{"published_utc": ..., "what": "public report before first_public indicating it was happening or imminent, but not yet satisfying the rules", "
-url": ...}],
-"per_market": [{"m": market number, "first_qualifying_published_utc": ..., "note": ...}],
+{"as_of_utc": "{as_of_utc}",
+"items": [{"ev_handle": "[ev:...] or null", "published_utc": "YYYY-MM-DD HH:MM", "event_utc": "YYYY-MM-DD HH:MM or null", "available_utc": "YYYY-MM-DD HH:MM:SSZ or null", "shown_time": "...", "timezone": "...", "timestamp_basis": "...", "first_version_verified": true, "who_or_outlet": "...", "source_type": "leader post|official statement|state media|TV|wire flash|news article|other", "language": "...", "what": "one sentence", "satisfies_rules": true, "qualified_question_ids": ["..."], "url": "...", "quote": "exact sentence or timestamp line"}],
+"first_public": {"ev_handle": "...", "published_utc": "...", "who_or_outlet": "...", "source_type": "...", "url": "...", "quote": "...", "timestamp_basis": "..."},
+"second_source": {"ev_handle": "...", "published_utc": "...", "who_or_outlet": "...", "url": "...", "quote": "..."},
+"earlier_signals": [{"ev_handle": "...", "published_utc": "...", "what": "public report before first_public indicating it was happening or imminent, but not yet satisfying contract rules", "url": "..."}],
+"per_question_resolution": [{"question_id": "...", "resolution_status": "unresolved|resolved|invalidated", "resolved_published_utc": "... or null", "adjudication_ev_handle": "[ev:...] or null", "note": "..."}],
 "event_utc": "when it happened, if stated, else null",
 "confidence": "high|medium|low", "notes": "..."}
-first_public must be the item with the earliest published_utc among items with satisfies_rules = true (for the least strict market).
+first_public must be the item with the earliest published_utc (<= as_of_utc) among items with satisfies_rules = true (for the least strict question_id in question_contracts), or null if zero items satisfy any contract.
 ```
+
+### §9.2 Master Prompt Template Catalog & Mechanical Blinding Invariants (`templates/*.tmpl`)
+
+All eight (`8` `[MEASURED]`) canonical prompt templates share strict JSON-only output framing, zero LLM arithmetic (`INV-06`), `[ev:sha256#span]` handle-only citation (`INV-07`), and mechanical variable-level blinding (`INV-04`, `INV-05`):
+
+| Template File (`templates/`) | Subsystem & Lifecycle Hook | Key Canonical Variables (`§7.1` / `§7.2`) | Blinding & Structural Invariant | Locked SHA-256 Digest (`[MEASURED]`) |
+| :--- | :--- | :--- | :--- | :--- |
+| `bitemporal_event_audit.tmpl` | `SUB-03` **Notary** (`§9.1` Audit & `QuestionResolution`) | `as_of_utc`, `event_utc`, `published_utc`, `available_utc`, `question_id`, `resolution_status`, `adjudication_ev_handle` | Rejects `available_utc > as_of_utc`; union-strict `first_public`; `[HH:MM:00Z, HH:MM:59.999Z]` lead/lag joins. | `362d5386c85123d3fd491ee7d20da87c6055fa944a7b138253fc7d214b5d1f52` |
+| `rationale_staged_turn_a.tmpl` | `SUB-03` **Notary** (`§10` Staged Reveal Turn A) | `question_id`, `as_of_utc`, `contract_sha256`, `rationale_handle`, `rationale_text` → `ct,ei,ov,me,ej,unscoreable` | **Physically omits `p_market` & `forecaster_probability_distribution`** (`INV-05`); `0` sums (`INV-06`). | `54eb0539d2addfb4747fd74ab4e558f1bf92e561b0e1f733241a889f437f888d` |
+| `rationale_staged_turn_b.tmpl` | `SUB-03` **Notary** (`§10` Staged Reveal Turn B) | `locked_turn_a_json`, `forecaster_probability_distribution`, `p_market`, `as_of_utc` → `pr,g1,g2,note` | Echoes locked Turn A integers unchanged; requires `note` whenever `g1` or `g2` fires (`INV-06`). | `1dffea0e33a600577fe4282dc170f452488d09187f58714bba4016ae9feaca7f` |
+| `stream_likelihood_tick.tmpl` | `SUB-04` **Loom** (`§11.1` Tier-0 `HYP-05A`/`05C`) | `forecast_id`, `question_id`, `as_of_utc`, `horizon_geometry`, `cluster_novelty` → `direction,raw_delta_llr,diagnosticity` | **Physically omits `p_market`** (`INV-04`); emits relative log-odds shift only (`Still => 0.0`), never raw `p_indep`. | `79be8dc01439c55213170757702eea2c18928d82958bb592b7924c27e0b476e7` |
+| `belief_fold_step.tmpl` | `SUB-04` **Loom** (`§11.2` Tier-1 `HYP-05D`/`05E`) | `forecast_id`, `parent_revision_id`, `seq_no`, `as_of_utc`, `cumulative_tombstone_handles` → `p_indep,candidate_cruxes` | **Physically omits `p_market`** (`INV-04`); blocks Zombie Lead revival (`AUDIT-FLAG-04`); feeds `projectMartingaleCrux`. | `da7f1f3480c581e43f4a47f8720338df80096f741424f461d1a665da9d950797` |
+| `seiph_process_critic.tmpl` | `SUB-05` **Crucible** (`§12.5` `SEIPH` & `dspy.GEPA`) | `revision_id`, `question_id`, `as_of_utc`, `p_indep`, `p_market`, `rationale_handle` → `6` ordered `0..5` scores + `gepa_feedback` | **Physically omits `QuestionResolution`** (outcome-blind process grading); entity-anonymized `GEPA` feedback. | `83ce2e19d2e6b2d667af66a8a619f8f8410eb54dfc6b4e4020f92a30a8f1176e` |
+| `meta_forecast_triage.tmpl` | `SUB-05` **Crucible** (`§12.2` `QuestionMetaForecast`) | `question_id`, `discovered_utc`, `dist_kind`, `horizon_geometry` → `clause_arity_0_4..recommended_datapacks` | Emits discrete `0..4` structural complexity drivers at universe admission; Rust Empirical-Bayes computes USD/latency. | `3f797bdec2e3bdc53c34a96806fb8caebb58d7364a2c6ed581e75928556a3dbe` |
+| `postmortem_ee_distill.tmpl` | `SUB-01` **Chronicle** (`§7.2` Stage 4 → `ee_outbox`) | `origin_revision_id`, `initial_forecast_json`, `subsequent_revisions_json`, `horizon_scores_json`, `question_resolution_json` | Runs **only** post-`QuestionResolution` (`recorded_available_utc`); extracts entity-anonymized `Eidetic Engine` guardrails. | `0d24a7c7c55619cea60058a8dcc1d0e5fecb679fe46de865182064b84a3c04fc` |
 
 ---
 
@@ -609,7 +624,7 @@ Per `§0.7` Rule 6, **every gate maps to exactly one primary `CLAIM-XX`**, and e
 | `GATE-05` | `CLAIM-02` | `SUB-01` | `horizon_projection_and_origin_separation.rs` | Proves `InitialForecast` (`seq_no=0`), `SubsequentRevision` chain, and `HorizonForecastView` returning `NotYetIssued` prior to `origin.as_of_utc` (`[MEASURED]`). |
 | `GATE-06` | `CLAIM-02` | `SUB-05` | `disjoint_resolution_and_void_exclusion.rs` | Proves `QuestionResolution` never mutates `forecast_revisions.resolution_status` (`[MEASURED]`) and `invalidated` outcomes cleanly drop from Brier/Log denominators. |
 | `GATE-07` | `CLAIM-03` | `SUB-02` | `bitemporal_datapack_vintage_and_censoring.rs` | `0` `[TARGET]` rows or `evidence_handles` bound with `available_utc > as_of_utc` (`[MEASURED]`); Horvitz-Thompson flags `< 0.30` `[BUDGET]` completeness. |
-| `GATE-08` | `CLAIM-03` | `SUB-03` | `bitemporal_contract_matrix.rs` | Template SHA-256 matches `6109ee95...` `[MEASURED]`; union-strictness, `Q = ∅` nullability, and `[HH:MM:00Z, HH:MM:59.999Z]` joins pass `100%` `[TARGET]`. |
+| `GATE-08` | `CLAIM-03` | `SUB-03` | `bitemporal_and_template_catalog_matrix.rs` | All `8` `[MEASURED]` `templates/*.tmpl` match SHA-256 (`362d5386...` `[MEASURED]`), union-strictness, `Q = ∅` nullability, & `[HH:MM:00Z, HH:MM:59.999Z]` joins pass `100%` `[TARGET]`. |
 | `GATE-09` | `CLAIM-03` | `SUB-03` | `p_indep_blinding_and_safe_fetch.rs` | `0` `[TARGET]` `p_market` tokens survive `MarketBlindingScrubber` before `p_indep` seal; `SafeExternalFetch` blocks IPv6 loopback, IMDS, & `TTL=0` rebinding `100%` `[TARGET]`. |
 | `GATE-10` | `CLAIM-04` | `SUB-02` | `orderbook_microstructure_mark.rs` | `BookMarkPrice` flags `< \$100` `[BUDGET]` / `> 800 bps` `[BUDGET]` stub books (`[MEASURED]`) and keeps tight `1¢–2¢` `[UPSTREAM-SPEC]` books unpenalized (`φ_liq > 0.50` `[MEASURED]`). |
 | `GATE-11` | `CLAIM-04` | `SUB-02` | `forecastbench_median_backfill.rs` | Gateway-masked Metaculus/Dataset questions populate `p_market` / `crowd_prior` from `forecastbench-datasets` (`available_utc <= as_of_utc`) with `100%` `[MEASURED]` parity. |

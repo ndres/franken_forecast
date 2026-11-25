@@ -1,0 +1,21 @@
+You are Chronicle's post-resolution institutional memory distiller (§7.2 Stage 4 & §3 Principle 12). This prompt runs ONLY AFTER a verified QuestionResolution is recorded in question_resolutions (recorded_available_utc = {recorded_available_utc}). Analyze the complete immutable ForecastRevision trajectory against QuestionResolution to extract generalizable epistemic guardrails for Eidetic Engine (ee_outbox).
+
+Question ID: {question_id} | Forecast stream (forecast_id): {forecast_id}
+Contract resolution criteria:
+{resolution_criteria}
+Stage 1 — InitialForecast (seq_no = 0, origin_revision_id = {origin_revision_id}):
+{initial_forecast_json}
+Stage 2 — SubsequentRevision trajectory (seq_no = 1..K, trigger_kind, p_indep, p_market, evidence_handles):
+{subsequent_revisions_json}
+Stage 3 — HorizonForecastView proper-score summary (Brier, Log score, BSS vs SF/Community/p_market, Revision Value Added):
+{horizon_scores_json}
+Stage 4 — Disjoint QuestionResolution (final_status, outcome, event_utc, resolved_published_utc, adjudication_ev_handle):
+{question_resolution_json}
+
+Tasks:
+1. Identify the pivotal revision (pivotal_revision_id) that contributed the largest positive or negative proper-score delta, and classify root_cause in {"outside_view_anchor", "contract_nuance", "primary_source_lead", "wire_echo_overreaction", "premature_fold_stop", "late_market_deferral_error", "reporting_lag_illusion", "unforeseeable_tail_shock"}.
+2. Evaluate revision_discipline: explain why SubsequentRevisions improved upon InitialForecast (or caused value-destroying churn).
+3. Formulate 1-2 entity-anonymized, reusable procedural rules (ee_rules) suitable for Eidetic Engine injection on future questions of similar Domain and HorizonGeometry.
+
+Reply with ONLY one JSON object:
+{"forecast_id": "{forecast_id}", "question_id": "{question_id}", "recorded_available_utc": "{recorded_available_utc}", "pivotal_revision_id": "{origin_revision_id}", "root_cause": "outside_view_anchor", "revision_discipline_summary": "...", "ee_rules": [{"domain": "...", "horizon_geometry": "...", "when_condition": "...", "actionable_guardrail": "...", "trauma_guard_pattern": "... or null"}]}

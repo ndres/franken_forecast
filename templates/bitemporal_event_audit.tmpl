@@ -1,36 +1,32 @@
-Event (description ): {event}
-Approximate date (UTC): {date}
-Prediction markets resolved by this event, with their rules (they define exactly what must have happened):
-{markets}
-Two different times matter, never mix them:
-- published_utc: when a post / statement / broadcast / article became visible to the public;
-- event_utc: when the thing itself happened, as described by a source (e.g. "the strikes began at 22:40 GMT" written in a later article is an event time, NOT a
-publication time).
+Event description: {event_description}
+Approximate event window (UTC): {approx_event_utc}
+Information cutoff (as_of_utc — NEVER use any source, edit, or archive capture with available_utc > as_of_utc): {as_of_utc}
+Forecasted questions and resolution contracts (question_id, venue, contract_sha256, and exact rules):
+{question_contracts}
+Vaulted candidate evidence handles (ev_handle in [ev:sha256#span] with recorded available_utc <= as_of_utc):
+{evidence_handles_context}
+
+Three distinct timestamps govern bi-temporal and replay integrity — NEVER mix them:
+- event_utc: when the physical or institutional action itself happened as described by a source (e.g. "the strikes began at 22:40 GMT" in a later article is event_utc, NOT published_utc).
+- published_utc: when a post, official statement, broadcast, or wire flash first became visible to the public (maps to QuestionResolution.resolved_published_utc when rule-satisfying).
+- available_utc: when that exact version/capture was archived or ingested into EvidenceVault (maps to QuestionResolution.recorded_available_utc; MUST satisfy available_utc <= as_of_utc).
+
 Rules for judging:
-- satisfies_rules = true only if that item itself reports the event HAS happened AND meets the specific market rule (e.g. "missiles launched" does not satisfy "
-missiles entered Israeli airspace"; "talks scheduled" does not satisfy "met in person"; "deal close" does not satisfy "agreement reached").
-- Consider ANY party involved: leaders' posts (Truth Social, X, Telegram), governments, militaries, state media of either side, mediators, live TV, wire flashes (
-Reuters/AP/AFP/Yonhap/etc.), local media in any language.
-- For every time, state timestamp_basis: "page shows time with timezone", "page shows time, timezone inferred (say how)", "metadata/JSON-LD", "archive capture", "URL
-", or "other". Convert to UTC carefully.
-- If a wire or news report says someone "said", "announced", "posted" or "confirmed" it (e.g. "Israel said it launched an attack", "Trump announced on Truth Social"),
-that original statement is usually earlier than the report: find the original post / statement / broadcast itself and its own time (the official's X or
-Telegram account, the ministry or military spokesperson channel, the live TV moment), including sources in Hebrew, Arabic, Persian, Russian, Ukrainian, Korean,
-etc. List both.
-- Screenshots and reposts of social posts often show the viewer's local time without a timezone: only use such a time if the timezone can be established; otherwise
-use a source with an explicit timezone.
-- If a page was updated later, say whether the quoted text was in the first version.
-- If you cannot find something, use null. Never guess.
-{hint}
+- satisfies_rules = true for a question_id ONLY if that item itself reports the event HAS happened AND meets that question_id's specific contract rules (e.g. "missiles launched" does not satisfy "missiles entered Israeli airspace"; "talks scheduled" does not satisfy "met in person"; "deal close" does not satisfy "agreement reached").
+- Consider ANY party involved: leaders' posts (Truth Social, X, Telegram), governments, militaries, state media of either side, mediators, live TV, wire flashes (Reuters/AP/AFP/Yonhap/etc.), local media in any language.
+- For every timestamp, state timestamp_basis: "page shows time with timezone", "page shows time, timezone inferred (say how)", "metadata/JSON-LD", "archive capture", "URL", or "other". Convert to UTC carefully.
+- If a wire or news report says someone "said", "announced", "posted" or "confirmed" it (e.g. "Israel said it launched an attack", "Trump announced on Truth Social"), that original statement is usually earlier than the report: find the original post / statement / broadcast itself and its own published_utc (the official's X or Telegram account, the ministry or military spokesperson channel, the live TV moment), including sources in Hebrew, Arabic, Persian, Russian, Ukrainian, Korean, etc. List both.
+- Screenshots and reposts of social posts often show the viewer's local time without a timezone: only use such a time if the timezone can be established; otherwise use a source with an explicit timezone.
+- If a page was updated later, state first_version_verified (true/false/null) indicating whether the quoted text was in the initial version prior to as_of_utc.
+- Bind ev_handle ("[ev:sha256#span]") whenever citing a vaulted source; if no vaulted or verifiable public source exists <= as_of_utc, use null. Never guess.
+{union_strictness_hint}
 Reply with ONLY one JSON object, no other text:
-{"items": [{"published_utc": "YYYY-MM-DD HH:MM", "shown_time": "...", "timezone": "...", "timestamp_basis": "...", "event_utc": "... or null", "who_or_outlet": "...",
-"source_type": "leader post|official statement|state media|TV|wire flash|news article|other", "language": "...", "what": "one sentence", "satisfies_rules":
-true/false, "url": "...", "quote": "exact sentence or timestamp line"}],
-"first_public": {"published_utc": ..., "who_or_outlet": ..., "source_type": ..., "url": ..., "quote": ..., "timestamp_basis": ...},
-"second_source": {"published_utc": ..., "who_or_outlet": ..., "url": ..., "quote": ...},
-"earlier_signals": [{"published_utc": ..., "what": "public report before first_public indicating it was happening or imminent, but not yet satisfying the rules", "
-url": ...}],
-"per_market": [{"m": market number, "first_qualifying_published_utc": ..., "note": ...}],
+{"as_of_utc": "{as_of_utc}",
+"items": [{"ev_handle": "[ev:...] or null", "published_utc": "YYYY-MM-DD HH:MM", "event_utc": "YYYY-MM-DD HH:MM or null", "available_utc": "YYYY-MM-DD HH:MM:SSZ or null", "shown_time": "...", "timezone": "...", "timestamp_basis": "...", "first_version_verified": true, "who_or_outlet": "...", "source_type": "leader post|official statement|state media|TV|wire flash|news article|other", "language": "...", "what": "one sentence", "satisfies_rules": true, "qualified_question_ids": ["..."], "url": "...", "quote": "exact sentence or timestamp line"}],
+"first_public": {"ev_handle": "...", "published_utc": "...", "who_or_outlet": "...", "source_type": "...", "url": "...", "quote": "...", "timestamp_basis": "..."},
+"second_source": {"ev_handle": "...", "published_utc": "...", "who_or_outlet": "...", "url": "...", "quote": "..."},
+"earlier_signals": [{"ev_handle": "...", "published_utc": "...", "what": "public report before first_public indicating it was happening or imminent, but not yet satisfying contract rules", "url": "..."}],
+"per_question_resolution": [{"question_id": "...", "resolution_status": "unresolved|resolved|invalidated", "resolved_published_utc": "... or null", "adjudication_ev_handle": "[ev:...] or null", "note": "..."}],
 "event_utc": "when it happened, if stated, else null",
 "confidence": "high|medium|low", "notes": "..."}
-first_public must be the item with the earliest published_utc among items with satisfies_rules = true (for the least strict market).
+first_public must be the item with the earliest published_utc (<= as_of_utc) among items with satisfies_rules = true (for the least strict question_id in question_contracts), or null if zero items satisfy any contract.

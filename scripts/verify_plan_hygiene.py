@@ -90,6 +90,23 @@ CLAIM05_HYPOTHESES = (
     "HYP-05F",
 )
 
+EXPECTED_TEMPLATES = (
+    "bitemporal_event_audit.tmpl",
+    "rationale_staged_turn_a.tmpl",
+    "rationale_staged_turn_b.tmpl",
+    "stream_likelihood_tick.tmpl",
+    "belief_fold_step.tmpl",
+    "seiph_process_critic.tmpl",
+    "meta_forecast_triage.tmpl",
+    "postmortem_ee_distill.tmpl",
+)
+
+MARKET_BLIND_TEMPLATES = (
+    "rationale_staged_turn_a.tmpl",
+    "stream_likelihood_tick.tmpl",
+    "belief_fold_step.tmpl",
+)
+
 
 def fail(msg: str) -> None:
     print(f"HYGIENE_FAIL: {msg}", file=sys.stderr)
@@ -257,27 +274,54 @@ def main() -> None:
     if total_gb != 4000:
         fail(f"Expected 6 storage tiers to sum to 4,000 GB, got {total_gb} GB")
 
-    # 9. Verbatim SHA-256 check on bitemporal_event_audit.tmpl vs §9 fenced block
+    # 9. Verbatim SHA-256 & Canonical Variable/Blinding checks across all 8 templates/*.tmpl (§9.1 & §9.2)
+    tmpl_dir = ROOT / "templates"
+    for tname in EXPECTED_TEMPLATES:
+        tpath = tmpl_dir / tname
+        if not tpath.exists():
+            fail(f"Missing canonical template file: {tpath}")
+        tbytes = tpath.read_bytes()
+        tsha = hashlib.sha256(tbytes).hexdigest()
+        if tsha not in text:
+            fail(f"Master plan §9.2 missing exact SHA-256 ({tsha}) for {tname}")
+        tstr = tbytes.decode("utf-8")
+        if tname in MARKET_BLIND_TEMPLATES and "{p_market}" in tstr:
+            fail(f"Blinding violation (INV-04/INV-05): {tname} must NOT contain {{p_market}} placeholder")
+        if tname == "rationale_staged_turn_a.tmpl" and "{forecaster_probability_distribution}" in tstr:
+            fail("Blinding violation (INV-05): rationale_staged_turn_a.tmpl must NOT reveal forecaster forecast")
+
     tmpl_bytes = TMPL_PATH.read_bytes()
     tmpl_sha = hashlib.sha256(tmpl_bytes).hexdigest()
-    if tmpl_sha not in text:
-        fail(f"Master plan does not record exact template SHA-256 ({tmpl_sha})")
+    bitemp_str = tmpl_bytes.decode("utf-8")
+    for req_var in (
+        "{as_of_utc}",
+        "event_utc",
+        "published_utc",
+        "available_utc",
+        "question_id",
+        "resolution_status",
+        "resolved_published_utc",
+        "adjudication_ev_handle",
+        "ev_handle",
+    ):
+        if req_var not in bitemp_str:
+            fail(f"bitemporal_event_audit.tmpl missing canonical §7.1/§7.2 variable: {req_var}")
 
     block_match = re.search(
-        r"```text\n(Event \(description \): \{event\}.*?least strict market\)\.\n)```",
+        r"```text\n(Event description: \{event_description\}.*?zero items satisfy any contract\.\n)```",
         text,
         flags=re.DOTALL,
     )
     if not block_match:
-        fail("Could not locate verbatim bitemporal_event_audit.tmpl code block in §9")
+        fail("Could not locate verbatim bitemporal_event_audit.tmpl code block in §9.1")
     embedded_sha = hashlib.sha256(block_match.group(1).encode("utf-8")).hexdigest()
     if embedded_sha != tmpl_sha:
-        fail(f"Embedded §9 template SHA-256 ({embedded_sha}) != file SHA-256 ({tmpl_sha})")
+        fail(f"Embedded §9.1 template SHA-256 ({embedded_sha}) != file SHA-256 ({tmpl_sha})")
 
     print(
         f"PLAN_HYGIENE_OK: 8 subsystems, 12 ForecastRevision fields, 4 lifecycle stages, "
-        f"10 universe metrics, 8 claims + 6 HYP-05*, {len(seen_gates)} 1-to-1 gates, "
-        f"6 crates, {total_gb}GB NVMe, 0 GPU/sim drift, template_sha256={tmpl_sha[:16]}..."
+        f"8 SHA256-locked templates, 10 universe metrics, 8 claims + 6 HYP-05*, "
+        f"{len(seen_gates)} 1-to-1 gates, 6 crates, {total_gb}GB NVMe, bitemp_sha256={tmpl_sha[:16]}..."
     )
 
 

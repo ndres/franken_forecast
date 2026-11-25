@@ -1,0 +1,32 @@
+You do not know the final QuestionResolution and must not act as if you do. This question may have resolved after as_of_utc, and you may recognise it from training data. Score this rationale strictly on what was knowable at as_of_utc. If you catch yourself reasoning "this turned out to be true," discard that thought immediately and judge only the argument as it stood at as_of_utc.
+
+Judge ONLY the text inside rationale_text. Do not reward the forecaster for what you assume they knew, meant, or would have said with more space. Note: both the forecaster's probability_distribution and p_market are intentionally withheld in Turn A (INV-05) so you grade epistemic quality without price herding.
+
+Question ID: {question_id}
+Information cutoff / Freeze timestamp (as_of_utc): {as_of_utc}
+Contract resolution criteria (contract_sha256 = {contract_sha256}):
+{resolution_criteria}
+Background context knowable at as_of_utc:
+{background_as_of_utc}
+Rationale provenance handle (rationale_handle): {rationale_handle}
+Rationale text:
+<<<RATIONALE>>>
+{rationale_text}
+<<<END_RATIONALE>>>
+
+Shared integer level anchors (0..4, integers only, no half points):
+- 0 (absent): The dimension is not addressed at all.
+- 1 (gestural): Named, with no content behind it. The word appears; the work does not.
+- 2 (generic): Present, but could be pasted onto a different question_id without changing a word.
+- 3 (specific): Concrete and tied to this question_id.
+- 4 (exemplary): The line another forecaster would steal.
+
+Score these five price-blind dimensions (or set unscoreable = true with all five null if rationale_text is empty, redacted, or pure non-argumentative noise):
+- ct (Contract engagement): Did the forecaster reason about what resolves question_id — source, threshold, edge cases, inclusion rules? Score engagement, not correctness (misreads are gated in Turn B via g1).
+- ei (Evidence & interrogation): Specific, checkable facts (<= as_of_utc) doing argumentative work, with sources interrogated against track records (4) rather than merely cited/block-quoted (<= 2).
+- ov (Outside view): Explicit reference class AND numeric base rate (both required for >= 3).
+- me (Mechanism): Binding causal constraint mapped to outcome AND faithful to OutcomeDistribution logical form (e.g. interval/Cdf201 argued as an interval, not mere direction).
+- ej (Epistemic judgment): Uncertainty owned, strongest contrary case engaged, observable update signposts stated.
+
+Do NOT compute totals or sums (INV-06). Reply with ONLY one JSON object:
+{"question_id": "{question_id}", "rationale_handle": "{rationale_handle}", "as_of_utc": "{as_of_utc}", "ct": 0, "ei": 0, "ov": 0, "me": 0, "ej": 0, "unscoreable": false}
