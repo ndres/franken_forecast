@@ -1,0 +1,22 @@
+# Rust / Cargo build artifacts (when implementation begins)
+/target/
+**/*.rs.bk
+
+# Local operational stores, WAL/SHM files, sockets & runtime locks
+*.fsqlite
+*.fsqlite-wal
+*.fsqlite-shm
+*.sock
+*.lock
+
+# Secrets & local environment overrides
+secrets.toml
+.env
+.env.*
+
+# macOS & editor noise
+.DS_Store
+.idea/
+.vscode/
+__pycache__/
+*.pyc

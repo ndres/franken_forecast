@@ -1,0 +1,36 @@
+Event (description ): {event}
+Approximate date (UTC): {date}
+Prediction markets resolved by this event, with their rules (they define exactly what must have happened):
+{markets}
+Two different times matter, never mix them:
+- published_utc: when a post / statement / broadcast / article became visible to the public;
+- event_utc: when the thing itself happened, as described by a source (e.g. "the strikes began at 22:40 GMT" written in a later article is an event time, NOT a
+publication time).
+Rules for judging:
+- satisfies_rules = true only if that item itself reports the event HAS happened AND meets the specific market rule (e.g. "missiles launched" does not satisfy "
+missiles entered Israeli airspace"; "talks scheduled" does not satisfy "met in person"; "deal close" does not satisfy "agreement reached").
+- Consider ANY party involved: leaders' posts (Truth Social, X, Telegram), governments, militaries, state media of either side, mediators, live TV, wire flashes (
+Reuters/AP/AFP/Yonhap/etc.), local media in any language.
+- For every time, state timestamp_basis: "page shows time with timezone", "page shows time, timezone inferred (say how)", "metadata/JSON-LD", "archive capture", "URL
+", or "other". Convert to UTC carefully.
+- If a wire or news report says someone "said", "announced", "posted" or "confirmed" it (e.g. "Israel said it launched an attack", "Trump announced on Truth Social"),
+that original statement is usually earlier than the report: find the original post / statement / broadcast itself and its own time (the official's X or
+Telegram account, the ministry or military spokesperson channel, the live TV moment), including sources in Hebrew, Arabic, Persian, Russian, Ukrainian, Korean,
+etc. List both.
+- Screenshots and reposts of social posts often show the viewer's local time without a timezone: only use such a time if the timezone can be established; otherwise
+use a source with an explicit timezone.
+- If a page was updated later, say whether the quoted text was in the first version.
+- If you cannot find something, use null. Never guess.
+{hint}
+Reply with ONLY one JSON object, no other text:
+{"items": [{"published_utc": "YYYY-MM-DD HH:MM", "shown_time": "...", "timezone": "...", "timestamp_basis": "...", "event_utc": "... or null", "who_or_outlet": "...",
+"source_type": "leader post|official statement|state media|TV|wire flash|news article|other", "language": "...", "what": "one sentence", "satisfies_rules":
+true/false, "url": "...", "quote": "exact sentence or timestamp line"}],
+"first_public": {"published_utc": ..., "who_or_outlet": ..., "source_type": ..., "url": ..., "quote": ..., "timestamp_basis": ...},
+"second_source": {"published_utc": ..., "who_or_outlet": ..., "url": ..., "quote": ...},
+"earlier_signals": [{"published_utc": ..., "what": "public report before first_public indicating it was happening or imminent, but not yet satisfying the rules", "
+url": ...}],
+"per_market": [{"m": market number, "first_qualifying_published_utc": ..., "note": ...}],
+"event_utc": "when it happened, if stated, else null",
+"confidence": "high|medium|low", "notes": "..."}
+first_public must be the item with the earliest published_utc among items with satisfies_rules = true (for the least strict market).
