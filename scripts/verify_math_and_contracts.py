@@ -785,4 +785,83 @@ cdf_disc = build_metaculus_cdf([(3, 0.20), (8, 0.60), (12, 0.90)], 0.0, 15.0, Fa
 assert len(cdf_disc) == 16 and cdf_disc[0] == 0.0 and cdf_disc[-1] <= 0.999
 assert all(5e-5 - 1e-12 <= cdf_disc[i] - cdf_disc[i - 1] <= 0.59 + 1e-12 for i in range(1, 16))
 
+# Pure-Rust forecastingresearch/forecastbench Submission Validator & Two-Way Fixed-Effects Difficulty-Adjusted Brier
+def validate_forecastbench_submission(question_set_keys, submission):
+    for req in ("organization", "model", "model_organization", "question_set", "forecasts"):
+        assert req in submission and submission[req], f"Missing required top-level key: {req}"
+    seen = {}
+    for row in submission["forecasts"]:
+        qid = tuple(row["id"]) if isinstance(row["id"], list) else (row["id"],)
+        direction = tuple(row["direction"]) if isinstance(row.get("direction"), list) else None
+        if len(qid) > 1:
+            assert direction is not None and len(direction) == len(qid), "Combo arity mismatch"
+            assert all(d in (1, -1) for d in direction), "Invalid Combo direction"
+        p = row["forecast"]
+        assert isinstance(p, (int, float)) and not math.isnan(p) and 0.0 <= p <= 1.0, f"Invalid prob: {p}"
+        key = (qid, row["source"], row.get("resolution_date"), direction)
+        assert key not in seen, f"Duplicate forecast key: {key}"
+        seen[key] = p
+    missing = set(question_set_keys) - set(seen.keys())
+    if missing:
+        raise ValueError(f"INCOMPLETE_SUBMISSION_MISSING_KEYS: {len(missing)}")
+    # Signed Fréchet check on any 2-leg Combo (id1, id2) with direction (+1, +1) whose marginals exist
+    for (qid, src, rdate, direction), p_ab in seen.items():
+        if len(qid) == 2 and direction == (1, 1):
+            pa = seen.get(((qid[0],), src, rdate, None))
+            pb = seen.get(((qid[1],), src, rdate, None))
+            if pa is not None and pb is not None:
+                lo, hi = max(0.0, pa + pb - 1.0), min(pa, pb)
+                assert lo - 1e-9 <= p_ab <= hi + 1e-9, f"Fréchet violation: {p_ab} not in [{lo}, {hi}]"
+    return True
+
+qset_keys = [
+    (("qA",), "polymarket", "2026-12-31", None),
+    (("qB",), "polymarket", "2026-12-31", None),
+    (("qA", "qB"), "polymarket", "2026-12-31", (1, 1)),
+]
+valid_sub = {
+    "organization": "FrankenForecast", "model": "fcast-v1", "model_organization": "Google",
+    "question_set": "2026-11-29-llm.json",
+    "forecasts": [
+        {"id": "qA", "source": "polymarket", "forecast": 0.40, "resolution_date": "2026-12-31", "reasoning": "ev", "direction": None},
+        {"id": "qB", "source": "polymarket", "forecast": 0.50, "resolution_date": "2026-12-31", "reasoning": "ev", "direction": None},
+        {"id": ["qA", "qB"], "source": "polymarket", "forecast": 0.25, "resolution_date": "2026-12-31", "reasoning": "ev", "direction": [1, 1]},
+    ],
+}
+assert validate_forecastbench_submission(qset_keys, valid_sub) is True
+
+# Two-Way Fixed-Effects Difficulty-Adjusted Brier: B_{m,q} = alpha_m + delta_q (alternating projections)
+def solve_two_way_fe_brier(obs, iters=200):
+    models = sorted({m for m, _, _ in obs})
+    qs = sorted({q for _, q, _ in obs})
+    alpha = {m: 0.0 for m in models}
+    delta = {q: 0.0 for q in qs}
+    for _ in range(iters):
+        for m in models:
+            rows = [(q, b) for mm, q, b in obs if mm == m]
+            alpha[m] = sum(b - delta[q] for q, b in rows) / len(rows)
+        for q in qs:
+            rows = [(m, b) for m, qq, b in obs if qq == q]
+            delta[q] = sum(b - alpha[m] for m, b in rows) / len(rows)
+        mean_d = sum(delta.values()) / len(delta)
+        for q in qs:
+            delta[q] -= mean_d
+        for m in models:
+            alpha[m] += mean_d
+    return alpha, delta
+
+# True skill: model_A (0.10) is BETTER than model_B (0.14), but model_A faces harder questions (q2, q3)
+# while model_B faces easier questions (q1, q2), making raw mean Brier wrongly favor model_B!
+fe_obs = [
+    ("model_A", "q2_mid",  0.10 + 0.00),
+    ("model_A", "q3_hard", 0.10 + 0.10),  # raw mean A = 0.15
+    ("model_B", "q1_easy", 0.14 - 0.10),
+    ("model_B", "q2_mid",  0.14 + 0.00),  # raw mean B = 0.09 (misleading!)
+]
+raw_a = (0.10 + 0.20) / 2
+raw_b = (0.04 + 0.14) / 2
+alpha_fe, _ = solve_two_way_fe_brier(fe_obs)
+assert raw_b < raw_a and alpha_fe["model_A"] < alpha_fe["model_B"]
+assert abs((alpha_fe["model_B"] - alpha_fe["model_A"]) - 0.04) < 1e-6
+
 print("ALL_EXTENDED_VALIDATION_CHECKS_PASSED")

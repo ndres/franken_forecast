@@ -1,8 +1,8 @@
 # COMPREHENSIVE PLAN FOR FRANKENFORECAST (`fcast`)
 
 * **Repository:** `franken_forecast`
-* **Master Plan Version:** `1.6` (`2026-11-25`)
-* **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract, Metaculus `201`-point/discrete CDF & FutureEval contract math, 8-template SHA-256-locked prompt suite (`templates/*.tmpl`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 formal specification draft (`lean_experiments/`), full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite WAL/backup/migration triggers, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`)
+* **Master Plan Version:** `1.7` (`2026-11-25`)
+* **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract, Metaculus `201`-point/discrete CDF & FutureEval math, `forecastingresearch/forecastbench` submission schema & two-way fixed-effects difficulty-adjusted Brier scoring, 8-template SHA-256-locked prompt suite (`templates/*.tmpl`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 formal specification draft (`lean_experiments/`), full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite WAL/backup/migration triggers, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`)
 * **Core Instruments:** `fcast` (Core CLI), `fcastd` (`Asupersync` Job Daemon), `fcast-mcp` (Model Context Protocol Server), `fcast-verify` (Offline Receipt & Temporal-Fence Auditor), `fcast-tui` (`FrankenTUI` Terminal Cockpit)
 
 ---
@@ -32,7 +32,7 @@ Subsystem and gate maturity are tracked exclusively in `docs/delivery/DELIVERY_L
 
 ### §0.2 What "Implemented" Means
 
-Nothing in this repository's Rust crate graph is implemented as of `Plan v1.6` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
+Nothing in this repository's Rust crate graph is implemented as of `Plan v1.7` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
 
 1. **Zero Stubs & Strict Toolchain:** Compiles cleanly under `nightly-2026-11-01` (Rust Edition 2024 `[UPSTREAM-SPEC]`) with `#![deny(clippy::todo, clippy::unimplemented, clippy::unwrap_used)]` and `#![forbid(unsafe_code)]` outside the audited `<= 120` `[BUDGET]` LOC POSIX FD/lock module (`fcast-infra::sys`).
 2. **Dependency Hygiene:** Passes `cargo deny check bans advisories licenses sources` with singleton `asupersync` (`0` `[BUDGET]` instances of `tokio`, `reqwest`, `hyper`, `ort`, `openssl-sys`, `rusqlite`, `sqlx`, or `petgraph`).
@@ -227,6 +227,14 @@ Drawing directly from community bot architectures documented in Metaculus Notebo
    * **AskNews Seasonal Renewal & Health Probe (`/news` + `/deepnews`):** `Harvester`'s AskNews connector registers a `DoctorProbe` tracking OAuth2 credentials and seasonal quota expiry; `fcast onboard futureeval` emits the pre-filled renewal template for `contact@asknews.app` / AskNews Discord (`@freqai` / `@drafty`) including bot username, registered email, and `/news` + `/deepnews` endpoint confirmation.
 2. **Dual Tournament Execution Modes:** Supports continuous `fcastd` daemon polling (`15–30 min` `[BUDGET]` intervals checking open FutureEval / `MiniBench` posts) AND stateless scheduled CI execution (`fcast futureeval run --tournament fall-2026 --publish --publish-comments --skip-forecasted --budget-usd 2.50 --json`) with idempotent `skip_previously_forecasted_questions` deduplication and automatic re-forecasting when a `SubsequentRevision` moves `|Δlogit| >= 0.05` `[BUDGET]`.
 3. **Native FutureEval Scoring Parity (`Crucible`):** Computes **Metaculus Baseline Score**, **Peer Score**, and **Spot Peer Score** (via `HorizonForecastView`) head-to-head against Metaculus Community and Pro Forecaster medians alongside `ForecastBench` Brier/Log metrics.
+
+### §5.3 ForecastBench Biweekly Competition Workflow (`forecastingresearch/forecastbench`)
+
+`fcast` natively automates the **ForecastBench** biweekly evaluation cycle (`forecastingresearch/forecastbench` & `forecastingresearch/forecastbench-datasets` `[UPSTREAM-SPEC]`):
+
+1. **Automated Question-Set Sync & `freeze_datetime_value` Context:** Detects new biweekly `YYYY-MM-DD-llm.json` / `YYYY-MM-DD-human.json` question sets and nightly resolution sets, ingesting `forecast_due_date`, `freeze_datetime`, and `freeze_datetime_value` baselines across both **Market** (`polymarket`, `manifold`, `metaculus`, `kalshi`, `infer`) and **Dataset** (`acled`, `dbnomics`, `fred`, `yfinance`, `wikipedia`) sources while quarantining crowd baselines pre-seal (`INV-04`).
+2. **100%-Completeness Submission Guard:** Prevents silent `0.50` missing-forecast imputation penalties by validating `100%` `[TARGET]` coverage of all `(id, source, resolution_date, direction)` tuples (including multi-horizon `7d..3650d` dataset items and 2-leg `Combo` questions) prior to `forecast_due_date` under a `<= \$15.00` `[BUDGET]`/round VoI budget.
+3. **Difficulty-Adjusted Leaderboard Parity:** Computes ForecastBench's exact **two-way fixed-effects difficulty-adjusted Brier score** (`Market` vs. `Dataset` split + `0–100%` Overall Brier Index) locally against published Superforecaster, Public, and Market cohorts before shipping submissions.
 
 ---
 
@@ -476,7 +484,18 @@ To compete natively in **FutureEval Fall 2026**, **MiniBench**, and **ForecastBe
    * **`MonetaryCostManager` → `daemon_budget_ledger` + `CostGuard`:** Tracks per-question and per-tournament USD spend separately across sponsored credit pools (Google, Metaculus LLM Proxy, AskNews) and paid keys.
    * **`AskNewsSearcher` (`/news` + `/deepnews`) & `SmartSearcher`:** Native Rust `Harvester` connectors with `available_utc <= as_of_utc` vintage tagging.
    * **`Benchmarker` → `Crucible` FutureEval / `ForecastBench` Runner:** Evaluates historical resolved Metaculus/`MiniBench` sets under **Baseline Score**, **Peer Score**, and **Spot Peer Score**, alongside `ForecastBench` signed Fréchet `Combo` bounds, `CumulativeStoppingTime` PAV isotonicity, and `<= \$15.00` `[BUDGET]`/round VoI batching.
-4. **Air-Gapped `dspy.GEPA` Optimizer:** Optimizes prompts (`model_version`) and calibration (`calibration_version`) via `PurgedChronoSplitter` (`recorded_available_utc <= val_freeze_ts - 48h` `[BUDGET]`), `ReplayAsOf` air-gap, and `B = 2,000` `[BUDGET]` paired bootstrap promotion (`p < 0.10` `[TARGET]`) evaluated strictly on **full-universe `BSS_univ`** so `GEPA` cannot game scores by learning to abstain!
+### §12.6 Pure-Rust Port of `forecastingresearch/forecastbench` (`fcast-bench::forecastbench`)
+
+To run end-to-end ForecastBench rounds, strict schema validation, and local leaderboard scoring natively in Rust without Python evaluation scripts (`[MEASURED]` in `scripts/verify_math_and_contracts.py`):
+
+1. **Question-Set Loader & Template Expander:** Parses `YYYY-MM-DD-{llm,human}.json` (`forecast_due_date`, `question_set`, `questions[]`), deterministically expanding `{forecast_due_date}` and `{resolution_date}` f-string placeholders and mapping both scalar `id: String` and `Combo` `id: [String; 2]` + `direction: [i8; 2]` (`+1` / `-1`) onto `fcast-core::QuestionId`.
+2. **Strict Submission Exporter & Validator (`fcast bench validate --strict`):**
+   * Emits exact ForecastBench submission JSON (`organization`, `model`, `model_organization`, `question_set`, `forecasts[]`: `{id, source, forecast, resolution_date, reasoning, direction}` where `reasoning` pulls directly from `ForecastRevision.rationale_handle`).
+   * Rejects any missing `(id, source, resolution_date, direction)` entry (`0` `[TARGET]` un-forecasted items triggering `0.50` imputation), out-of-range/NaN probabilities, `Combo` arity mismatches, signed Fréchet violations, or non-monotone `CumulativeStoppingTime` multi-horizon curves.
+3. **Two-Way Fixed-Effects Difficulty-Adjusted Brier Solver (`fcast-bench::difficulty_fe`):** Fits $B_{m,q} = \alpha_m + \delta_q + \varepsilon_{m,q}$ via alternating projections / damped least squares across partially overlapping `(model, question)` matrices (`Market` & `Dataset` splits), outputting exact difficulty-adjusted Brier scores and `0–100%` Overall Brier Index parity against published `forecastbench-datasets` Superforecaster, Public, and Market leaderboards.
+
+### §12.7 Air-Gapped `dspy.GEPA` Optimizer
+* Optimizes prompts (`model_version`) and calibration (`calibration_version`) via `PurgedChronoSplitter` (`recorded_available_utc <= val_freeze_ts - 48h` `[BUDGET]`), `ReplayAsOf` air-gap, and `B = 2,000` `[BUDGET]` paired bootstrap promotion (`p < 0.10` `[TARGET]`) evaluated strictly on **full-universe `BSS_univ`** so `GEPA` cannot game scores by learning to abstain!
 
 ---
 
@@ -642,7 +661,7 @@ Per `§0.7` Rule 6, **every gate maps to exactly one primary `CLAIM-XX`**, and e
 | `GATE-12` | `CLAIM-04` | `SUB-02` | `domain_gate_and_cluster_alignment.rs` | `300`-question `[BUDGET]` benchmark achieves `>= 0.92` `[TARGET]` precision and `>= 0.90` `[TARGET]` recall on Geo/Macro/Cyber filtering. |
 | `GATE-13` | `CLAIM-05` | `SUB-04` | `conjugate_stream_decay_and_novelty.rs` | Audits `HYP-05A..05C`: log-odds `"Still"` invariance (`Δθ = 0` `[MEASURED]`), `0.80 + Up` monotonicity (`[MEASURED]`), grid-consistent `CumulativeStoppingTime` hazard decay, and clipped novelty overconfidence reduction (`[HYPOTHESIS]`). |
 | `GATE-14` | `CLAIM-05` | `SUB-04` | `fold_martingale_voi_and_cyber_kz.rs` | Audits `HYP-05D..05F`: monotone CAS tombstones, Fréchet-feasible Martingale `VoI_log` (`fold >= 2`, fat-tail `KL >= 0.50` `[BUDGET]`), and centered-LLR King-Zeng `2610.04798` `ECE < 0.005` `[TARGET]`, `BSS > 0.08` `[TARGET]`. |
-| `GATE-15` | `CLAIM-05` | `SUB-05` | `universe_selection_bias_ten_metrics_and_gepa.rs` | Irreversible `universe_question_ledger` (`[MEASURED]`), all `10` `[MEASURED]` metrics (`cost_per_resolved_forecast` incl. sunk spend, full-universe `BSS_univ`), Fréchet/PAV `<= \$15.00` `[BUDGET]`, & `HYP-05A..05F` ablation harness pass. |
+| `GATE-15` | `CLAIM-05` | `SUB-05` | `universe_selection_bias_forecastbench_and_gepa.rs` | Irreversible `universe_question_ledger` (`[MEASURED]`), all `10` `[MEASURED]` metrics, `forecastbench` `100%`-complete `Combo`/Fréchet submission JSON & two-way FE difficulty-adjusted Brier (`[MEASURED]`), `<= \$15.00` `[BUDGET]`/round, & `GEPA` pass. |
 | `GATE-16` | `CLAIM-06` | `SUB-03` | `staged_reveal_price_isolation.rs` | Wire capture proves Turn A payload contains `0` `[TARGET]` occurrences of `forecaster_forecast` or `crowd_prior`. |
 | `GATE-17` | `CLAIM-06` | `SUB-03` | `rationale_rubric_ranking_invariants.rs` | `10,000` `[BUDGET]` `proptest` cases verify `unscoreable`, `G2 -> 0`, `G1 -> min(sum, 8)` `[MEASURED]`, and deterministic tie-breaking. |
 | `GATE-18` | `CLAIM-06` | `SUB-03` | `rationale_gold_panel_agreement.rs` | Staged-reveal `6D+2G` achieves Spearman rank correlation `ρ >= 0.70` `[TARGET]` against `50` `[BUDGET]` human-annotated rationales. |
