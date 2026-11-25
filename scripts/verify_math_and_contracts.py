@@ -75,9 +75,22 @@ def should_stop_fold(fold_count: int, productive_folds: int, p_k: float, hyps, c
     i_hyp = max(0.0, entropy_bern(p_k) - sum(w * entropy_bern(ph) for w, ph in hyps))
     best_voi = 0.0
     for c in cruxes:
-        q_j, p_pos, r_j, cost_usd, attempts = c["q"], c["p_pos"], c["r"], c["cost"], c["attempts"]
-        # Martingale projection: q_j * p_pos + (1 - q_j) * p_neg = p_k
-        p_neg = min(max((p_k - q_j * p_pos) / (1.0 - q_j), 1e-6), 1.0 - 1e-6)
+        q_raw, p_pos_raw, r_j, cost_usd, attempts = c["q"], c["p_pos"], c["r"], c["cost"], c["attempts"]
+        # AUDIT-FLAG-05 (Lean Claim05Spec.projectMartingaleCrux): Fréchet-feasible Martingale projection
+        # ensuring p_neg in [1e-6, 1-1e-6] AND exact q_j * p_pos + (1 - q_j) * p_neg == p_k!
+        eps = 1e-6
+        eps_m = 2.0 * eps
+        p_pos = min(max(p_pos_raw, eps_m), 1.0 - eps_m)
+        if p_pos > p_k:
+            q_max = (p_k - eps_m) / (p_pos - eps_m)
+        elif p_pos < p_k:
+            q_max = (1.0 - eps_m - p_k) / (1.0 - eps_m - p_pos)
+        else:
+            q_max = 1.0 - eps_m
+        q_j = min(max(q_raw, eps), min(1.0 - eps, q_max))
+        p_neg = (p_k - q_j * p_pos) / (1.0 - q_j)
+        assert eps <= p_neg <= 1.0 - eps
+        assert abs((q_j * p_pos + (1.0 - q_j) * p_neg) - p_k) < 1e-12
         kl_pos = kl_bern(p_pos, p_k)
         kl_neg = kl_bern(p_neg, p_k)
         # Unprobed fat-tailed crux guard

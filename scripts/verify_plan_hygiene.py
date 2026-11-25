@@ -81,6 +81,15 @@ MANDATORY_TELEMETRY_METRICS = (
     "pct_revisions_improving_score",
 )
 
+CLAIM05_HYPOTHESES = (
+    "HYP-05A",
+    "HYP-05B",
+    "HYP-05C",
+    "HYP-05D",
+    "HYP-05E",
+    "HYP-05F",
+)
+
 
 def fail(msg: str) -> None:
     print(f"HYGIENE_FAIL: {msg}", file=sys.stderr)
@@ -168,10 +177,13 @@ def main() -> None:
         if not re.search(rf"\|\s*`{mkey}`\s*\|", sec12):
             fail(f"§12.4 missing mandatory telemetry metric row: {mkey}")
 
-    # 6. Claims & Master Gate Register 1-to-1 Claim Bijection (§0.7 Rule 6)
+    # 6. Claims, Subordinate HYP-05A..05F & Master Gate Register 1-to-1 Claim Bijection (§0.7 Rule 6)
     claims_defined = sorted(set(re.findall(r"`(CLAIM-0[1-8])`", text)))
     if len(claims_defined) != 8:
         fail(f"Expected CLAIM-01..CLAIM-08 (8 claims), found {claims_defined}")
+    for hyp in CLAIM05_HYPOTHESES:
+        if f"`{hyp}`" not in text:
+            fail(f"Missing subordinate experimental hypothesis {hyp} under CLAIM-05")
 
     gate_section_match = re.search(r"## §22\. Master Gate Register.*?(?=\n## §23\.|\Z)", text, flags=re.DOTALL)
     if not gate_section_match:
@@ -264,8 +276,8 @@ def main() -> None:
 
     print(
         f"PLAN_HYGIENE_OK: 8 subsystems, 12 ForecastRevision fields, 4 lifecycle stages, "
-        f"10 universe metrics, 8 claims, {len(seen_gates)} 1-to-1 gates, 6 crates, "
-        f"{total_gb}GB NVMe, 0 GPU/sim drift, template_sha256={tmpl_sha[:16]}..."
+        f"10 universe metrics, 8 claims + 6 HYP-05*, {len(seen_gates)} 1-to-1 gates, "
+        f"6 crates, {total_gb}GB NVMe, 0 GPU/sim drift, template_sha256={tmpl_sha[:16]}..."
     )
 
 

@@ -1,6 +1,6 @@
 # FrankenForecast (`franken_forecast`)
 
-> **Honest Repository Status (`Plan v1.2` · `2026-11-25`):** This is currently a **planning-and-contract repository** (`Tier 0: Plan-Only` for Rust Cargo crates; `Tier 1: Contract-Proved` for the canonical `ForecastRevision` lifecycle, full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite immutability/WAL/backup/migration schemas, rationale staging, log-score VoI stopping, conjugate decay, and document hygiene). **Zero Rust workspace crates are compiled in this repository yet.** See `§0.2` of [`COMPREHENSIVE_PLAN_FOR_FRANKEN_FORECAST.md`](./COMPREHENSIVE_PLAN_FOR_FRANKEN_FORECAST.md) for the eight mandatory conditions required before any subsystem may be marked *Implemented*.
+> **Honest Repository Status (`Plan v1.3` · `2026-11-25`):** This is currently a **planning, formal-spec, and contract repository** (`Tier 0: Plan-Only` for Rust Cargo crates; `Tier 1: Contract-Proved` for the canonical `ForecastRevision` lifecycle, full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 specification draft in [`lean_experiments/`](./lean_experiments/), SQLite immutability/WAL/backup/migration schemas, and document hygiene). **Zero Rust workspace crates are compiled in this repository yet.** See `§0.2` of [`COMPREHENSIVE_PLAN_FOR_FRANKEN_FORECAST.md`](./COMPREHENSIVE_PLAN_FOR_FRANKEN_FORECAST.md) for the eight mandatory conditions required before any subsystem may be marked *Implemented*.
 
 **FrankenForecast (`fcast`)** is a CPU-complete, pure-Rust geopolitical, macroeconomic, and cyber-risk probabilistic forecasting workstation, canonical `ForecastRevision` ledger, vintage-safe telemetry warehouse, hindsight-blind community-rationale judge, background job daemon, Model Context Protocol (MCP) server, and **ForecastBench** tournament competitor built on **Eidetic Engine (`ee`)** and the **Franken Suite** (`FrankenSQLite`, `FrankenTUI`, `Frankensearch`, `FrankenNetworkX`, `Asupersync`).
 
@@ -47,4 +47,5 @@ At the center of every subsystem sits the immutable **`ForecastRevision`** recor
 ```bash
 python3 scripts/verify_plan_hygiene.py
 python3 scripts/verify_math_and_contracts.py
+python3 lean_experiments/verify_audit_flags.py
 ```

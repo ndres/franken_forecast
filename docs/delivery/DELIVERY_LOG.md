@@ -4,8 +4,8 @@
 
 ## Current Repository Maturity
 
-* **Master Specification Version:** `1.2` (`2026-11-25`)
-* **Overall Implementation Status:** `Tier 0 (Plan-Only)` for the 6-crate Rust Cargo workspace (`0 / 6` crates compiled); `Tier 1 (Contract-Proved)` for the canonical immutable `ForecastRevision` 12-field schema + 4-stage lifecycle, full-universe anti-selection-bias `universe_question_ledger` + 10-metric scorecard + `QuestionMetaForecast` estimator, SQLite WAL/backup/migration contracts, rationale staging, log-score VoI stopping, conjugate decay, and document hygiene (`scripts/verify_math_and_contracts.py`, `scripts/verify_plan_hygiene.py`).
+* **Master Specification Version:** `1.3` (`2026-11-25`)
+* **Overall Implementation Status:** `Tier 0 (Plan-Only)` for the 6-crate Rust Cargo workspace (`0 / 6` crates compiled); `Tier 1 (Contract-Proved)` for the canonical immutable `ForecastRevision` 12-field schema + 4-stage lifecycle, `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 specification & audit harness (`lean_experiments/`), full-universe anti-selection-bias `universe_question_ledger` + 10-metric scorecard + `QuestionMetaForecast`, SQLite WAL/backup/migration contracts, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`).
 
 ## Gate Receipt Ledger (`GATE-01` .. `GATE-24`)
 
@@ -14,6 +14,8 @@
 | `GATE-01` .. `GATE-24` | `CLAIM-01` .. `CLAIM-08` | `SUB-01` .. `SUB-08` | `Tier 0` | *Pending `M0..M5` execution* | `UNIMPLEMENTED` |
 
 ## Chronological Delivery Entries
+
+* **2026-11-25 — `PLAN-v1.3` `CLAIM-05` Subordinate Hypotheses (`HYP-05A..05F`) & AlphaProof-Code Lean 4 Specification Experiment:** Preserved `CLAIM-05` as the umbrella epistemic skill claim decomposed into `HYP-05A..05F`, authored reference pseudocode + Lean 4 specification (`lean_experiments/Claim05Spec.lean`) + critical TCB "Closer Look" audit report (`lean_experiments/LEAN_EXPERIMENTS.md`), and repaired the `HYP-05E` naive-clamp Martingale feasibility bug uncovered during Lean formalization (`lean_experiments/verify_audit_flags.py`).
 
 * **2026-11-25 — `PLAN-v1.2` Meta-Forecasting Pane & Full-Universe Anti-Selection-Bias Telemetry:** Added `QuestionMetaForecast` (*"Forecast the Forecasts"*: cost, latency, popularity, complexity), irreversible `universe_question_ledger` (tracking full eligible universe, exclusion & abandonment rates, and sunk spend), all 10 mandatory dual-denominator system metrics (`§12.2–§12.4`), and `Cockpit` View `[6:Meta]` (`§16`), verified in SQLite WAL by `scripts/verify_math_and_contracts.py` and `scripts/verify_plan_hygiene.py`.
 
