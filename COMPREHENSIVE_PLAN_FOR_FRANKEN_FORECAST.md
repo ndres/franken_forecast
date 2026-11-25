@@ -1,8 +1,8 @@
 # COMPREHENSIVE PLAN FOR FRANKENFORECAST (`fcast`)
 
 * **Repository:** `franken_forecast`
-* **Master Plan Version:** `1.5` (`2026-11-25`)
-* **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract, 8-template SHA-256-locked prompt suite (`templates/*.tmpl`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 formal specification draft (`lean_experiments/`), full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite WAL/backup/migration triggers, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`)
+* **Master Plan Version:** `1.6` (`2026-11-25`)
+* **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract, Metaculus `201`-point/discrete CDF & FutureEval contract math, 8-template SHA-256-locked prompt suite (`templates/*.tmpl`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 formal specification draft (`lean_experiments/`), full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite WAL/backup/migration triggers, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`)
 * **Core Instruments:** `fcast` (Core CLI), `fcastd` (`Asupersync` Job Daemon), `fcast-mcp` (Model Context Protocol Server), `fcast-verify` (Offline Receipt & Temporal-Fence Auditor), `fcast-tui` (`FrankenTUI` Terminal Cockpit)
 
 ---
@@ -32,7 +32,7 @@ Subsystem and gate maturity are tracked exclusively in `docs/delivery/DELIVERY_L
 
 ### §0.2 What "Implemented" Means
 
-Nothing in this repository's Rust crate graph is implemented as of `Plan v1.5` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
+Nothing in this repository's Rust crate graph is implemented as of `Plan v1.6` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
 
 1. **Zero Stubs & Strict Toolchain:** Compiles cleanly under `nightly-2026-11-01` (Rust Edition 2024 `[UPSTREAM-SPEC]`) with `#![deny(clippy::todo, clippy::unimplemented, clippy::unwrap_used)]` and `#![forbid(unsafe_code)]` outside the audited `<= 120` `[BUDGET]` LOC POSIX FD/lock module (`fcast-infra::sys`).
 2. **Dependency Hygiene:** Passes `cargo deny check bans advisories licenses sources` with singleton `asupersync` (`0` `[BUDGET]` instances of `tokio`, `reqwest`, `hyper`, `ort`, `openssl-sys`, `rusqlite`, `sqlx`, or `petgraph`).
@@ -205,15 +205,28 @@ Per `§0.7` Rule 6, these eight claims are mutually distinct; every validation g
 
 ---
 
-## §5. Competitive Forecasting-Bot Patterns Adopted (`Metaculus Notebook 43497`)
+## §5. Competitive Bot Patterns (`Notebook 43497`) & Metaculus FutureEval Fall 2026 Architecture (`Notebook 45615`)
+
+### §5.1 Competitive Forecasting-Bot Patterns Adopted (`Metaculus Notebook 43497`)
 
 Drawing directly from community bot architectures documented in Metaculus Notebook `43497` (*"What are other bots doing?"* `[UPSTREAM-SPEC]`), `fcast` incorporates five proven production patterns that complement our core `ForecastRevision` and Two-Speed `Loom` design:
 
-1. **Multi-Vendor Model Ensembling & Robust Median Aggregation (`LlmRouter` + `Loom`):** Instead of relying exclusively on a single model family, `LlmRouter` supports an optional cross-vendor panel (e.g., Gemini + Claude + OpenAI/xAI via direct keys or OpenRouter) over the *identical* vaulted `EvidenceVault` brief, aggregating panel estimates via **robust median / trimmed log-odds** (avoiding brittle judge-LLM stackers) to cancel single-vendor bias.
+1. **Multi-Vendor Model Ensembling & Robust Median Aggregation (`LlmRouter` + `Loom`):** Instead of relying exclusively on a single model family, `LlmRouter` supports an optional cross-vendor panel (e.g., Gemini + Claude + OpenAI/xAI via direct keys, the Metaculus LLM Proxy, or OpenRouter) over the *identical* vaulted `EvidenceVault` brief, aggregating panel estimates via **robust median / trimmed log-odds** (avoiding brittle judge-LLM stackers) to cancel single-vendor bias.
 2. **Disagreement-Triggered Targeted Deep Dives (`FoldStoppingController`):** When cross-model ensemble spread ($\max_m p_m - \min_m p_m \ge 0.15$ `[BUDGET]` or inter-model KL dispersion exceeds threshold), `Loom` uses the exact divergence points to enqueue a **targeted secondary research fold** focused strictly on the unresolved crux rather than blind re-sampling.
-3. **Multi-Provider Parallel Search & Rich Artifact Parsing (`Harvester`):** Augments RSS/GDELT with concurrent multi-provider web search (`AskNews`, `Perplexity Sonar`, `Exa`, `OpenRouter` search) and deterministic **PDF, CSV, and structured-table parsing** (plus optional headless document rendering for JS-heavy official statistics portals), vaulting every extracted table/quote with `available_utc <= as_of_utc`.
+3. **Multi-Provider Parallel Search & Rich Artifact Parsing (`Harvester`):** Augments RSS/GDELT with concurrent multi-provider web search (`AskNews` `/news` + `/deepnews`, `Perplexity Sonar`, `Exa`, `OpenRouter` search) and deterministic **PDF, CSV, and structured-table parsing** (plus optional headless document rendering for JS-heavy official statistics portals), vaulting every extracted table/quote with `available_utc <= as_of_utc`.
 4. **Single-Knob Modular Ablation Discipline (`Crucible`):** Every experimental stage (`HYP-05A..05F`, multi-vendor ensembling, search provider, decay, tail-clipping, TimeSeek deferral) is controlled by an isolated single-knob config flag (`config/ablation.toml`) so backtests attribute Brier/Log deltas cleanly to one change at a time.
-5. **Fast-Feedback `MiniBench` Calibration & Defensive Tail-Clipping (`Crucible`):** Pairs biweekly `ForecastBench` rounds with fast-resolving Metaculus **MiniBench** tracks for rapid per-domain calibration feedback, and applies configurable **defensive tail-clipping** (default `[0.02, 0.98]` `[BUDGET]` tournament bounds, overridable per domain) to protect proper log-scores against catastrophic edge-case or ambiguous-resolution misses.
+5. **Fast-Feedback `MiniBench` Calibration & Defensive Tail-Clipping (`Crucible`):** Pairs seasonal tournaments with fast-resolving Metaculus **MiniBench** tracks for rapid per-domain calibration feedback, and applies configurable **defensive tail-clipping** (default `[0.02, 0.98]` `[BUDGET]` tournament bounds, overridable per domain) to protect proper log-scores against catastrophic edge-case or ambiguous-resolution misses.
+
+### §5.2 Metaculus FutureEval Fall 2026 Optimization, Sponsored Credits & Renewal (`Notebook 45615`)
+
+`fcast` is engineered as a first-class competitor for **Metaculus FutureEval Fall 2026** (`Notebook 45615` `[UPSTREAM-SPEC]`: `\$50,000` seasonal main bot tournament + bi-weekly `\$1,000` `MiniBench` tracks, subject to Metaculus's non-commercial `< 3` employee prize-eligibility policy):
+
+1. **Sponsored Credit Pools & Automated Seasonal Renewal (`fcast onboard futureeval`):**
+   * **Google Participant Bot Credits:** `LlmRouter` supports routing Gemini calls through participant-sponsored Google credit quotas with adaptive `429` shared-rate-limit backoff and separate quota accounting in `daemon_budget_ledger` (distinct from personal paid API spend).
+   * **Metaculus LLM Proxy (`llm-proxy.metaculus.com`):** Supports sponsored Anthropic/OpenAI multi-vendor ensemble legs via Metaculus's proxy endpoint. Running `fcast onboard futureeval` auto-generates the seasonal credit request/renewal email for `ben@metaculus.com` (bot username + concise 1–3 paragraph architecture summary compiled from `config/ablation.toml`).
+   * **AskNews Seasonal Renewal & Health Probe (`/news` + `/deepnews`):** `Harvester`'s AskNews connector registers a `DoctorProbe` tracking OAuth2 credentials and seasonal quota expiry; `fcast onboard futureeval` emits the pre-filled renewal template for `contact@asknews.app` / AskNews Discord (`@freqai` / `@drafty`) including bot username, registered email, and `/news` + `/deepnews` endpoint confirmation.
+2. **Dual Tournament Execution Modes:** Supports continuous `fcastd` daemon polling (`15–30 min` `[BUDGET]` intervals checking open FutureEval / `MiniBench` posts) AND stateless scheduled CI execution (`fcast futureeval run --tournament fall-2026 --publish --publish-comments --skip-forecasted --budget-usd 2.50 --json`) with idempotent `skip_previously_forecasted_questions` deduplication and automatic re-forecasting when a `SubsequentRevision` moves `|Δlogit| >= 0.05` `[BUDGET]`.
+3. **Native FutureEval Scoring Parity (`Crucible`):** Computes **Metaculus Baseline Score**, **Peer Score**, and **Spot Peer Score** (via `HorizonForecastView`) head-to-head against Metaculus Community and Pro Forecaster medians alongside `ForecastBench` Brier/Log metrics.
 
 ---
 
@@ -447,9 +460,23 @@ Every benchmark report (`fcast telemetry scorecard --json`), `fcast-mcp` resourc
 | `pct_forecasts_revised` | **Percentage of forecasts revised** | $\frac{\|\{f \in \mathcal{U}_{\text{issued}} : \max \text{seq\_no}(f) \ge 1\}\|}{\|\mathcal{U}_{\text{issued}}\|} \times 100\%$ | Distinguishes active longitudinal belief maintenance from fire-and-forget static issuance. |
 | `pct_revisions_improving_score` | **Percentage of revisions improving final score** | Stepwise $\Pr[S(R_{f,k}, y_f) > S(R_{f,k-1}, y_f)]$ AND net $\Pr[S(R_{f,\text{final}}, y_f) > S(R_{f,0}, y_f)]$ | Evaluated on all resolved revised streams $\mathcal{R}_{\text{revised}}$ under both Brier and Log score (`> 55%` `[TARGET]` net hit rate; flags churn if `<= 50%`). |
 
-### §12.5 `ForecastBench` Solver & Air-Gapped `dspy.GEPA` Optimizer
-* Enforces signed Fréchet bounds on `QuestionId::Combo` pairs, PAV isotonicity exclusively on `CumulativeStoppingTime` horizons, and `<= \$15.00` `[BUDGET]`/round VoI batch routing informed by `QuestionMetaForecast` (`Predicted Edge / est_cost_usd_p50`).
-* Optimizes prompts (`model_version`) and calibration (`calibration_version`) via `PurgedChronoSplitter` (`recorded_available_utc <= val_freeze_ts - 48h` `[BUDGET]`), `ReplayAsOf` air-gap, and `B = 2,000` `[BUDGET]` paired bootstrap promotion (`p < 0.10` `[TARGET]`) evaluated strictly on **full-universe `BSS_univ`** so `GEPA` cannot game scores by learning to abstain!
+### §12.5 Pure-Rust Metaculus Client (`forecasting-tools` Port), `ForecastBench` & `dspy.GEPA`
+
+To compete natively in **FutureEval Fall 2026**, **MiniBench**, and **ForecastBench** without a Python runtime dependency, `fcast` ports the battle-tested abstractions of `Metaculus/forecasting-tools` (`[UPSTREAM-SPEC]`) into pure Rust (`fcast-core::metaculus`, `fcast-ingest::metaculus`, `fcast-bench::futureeval`):
+
+1. **Typed `MetaculusQuestion` Hierarchy & `ApiFilter` (`fcast-ingest::metaculus`):**
+   * Supports all six Metaculus question families: `BinaryQuestion`, `MultipleChoiceQuestion` (simplex normalization, per-option floor `>= 0.001`), `NumericQuestion` (`201`-point CDF, linear & `zero_point` log-scale), `DiscreteQuestion` (`inbound_outcome_count + 1` `[UPSTREAM-SPEC]` CDF length), `DateQuestion` (UNIX epoch mapped onto continuous `201`-point CDF), and `ConditionalQuestion` / `GroupOfQuestions`.
+   * Implements paginated `GET /api/posts/` (`ApiFilter`: `tournaments`, `statuses`, `allowed_types`, `scheduled_resolve_time`), `GET /api/posts/{id}/`, idempotent `POST /api/questions/forecast/` (`skip_previously_forecasted_questions`), and `POST /api/comments/create/` (`EvidenceVault`-cited rationale publishing) over `ureq`+`rustls` with token-bucket rate limiting and `429`/`5xx` exponential backoff.
+2. **Strict Pure-Rust `MetaculusCdfBuilder` (Port of `NumericDistribution` — `[MEASURED]` in `scripts/verify_math_and_contracts.py`):**
+   * Converts LLM quantile anchors (`[p10, p20, p40, p60, p80, p90]`) into an API-compliant `cdf_size`-point (`201` continuous or `inbound_outcome_count + 1` discrete) CDF enforcing every Metaculus server rule (`[UPSTREAM-SPEC]`):
+     * **Log-Scale vs. Linear Axis (`zero_point`):** Maps values via $t(x) = \ln((x - z)/(L - z)) / \ln((U - z)/(L - z))$ when `zero_point = Some(z)`, else $(x - L)/(U - L)$.
+     * **Boundary Mass Rules:** Closed lower bound (`!open_lower_bound`) $\implies$ `cdf[0] == 0.0`, open lower $\implies$ `cdf[0] >= 0.001`; closed upper bound (`!open_upper_bound`) $\implies$ `cdf[N-1] == 1.0`, open upper $\implies$ `cdf[N-1] <= 0.999`.
+     * **Step-Size Bounds:** Enforces strict monotonicity `5e-5 <= cdf[i] - cdf[i-1] <= 0.59` `[UPSTREAM-SPEC]` (preventing `400 Bad Request` rejections on flat tails or sharp spikes).
+3. **Ported `forecasting-tools` Utilities:**
+   * **`MonetaryCostManager` → `daemon_budget_ledger` + `CostGuard`:** Tracks per-question and per-tournament USD spend separately across sponsored credit pools (Google, Metaculus LLM Proxy, AskNews) and paid keys.
+   * **`AskNewsSearcher` (`/news` + `/deepnews`) & `SmartSearcher`:** Native Rust `Harvester` connectors with `available_utc <= as_of_utc` vintage tagging.
+   * **`Benchmarker` → `Crucible` FutureEval / `ForecastBench` Runner:** Evaluates historical resolved Metaculus/`MiniBench` sets under **Baseline Score**, **Peer Score**, and **Spot Peer Score**, alongside `ForecastBench` signed Fréchet `Combo` bounds, `CumulativeStoppingTime` PAV isotonicity, and `<= \$15.00` `[BUDGET]`/round VoI batching.
+4. **Air-Gapped `dspy.GEPA` Optimizer:** Optimizes prompts (`model_version`) and calibration (`calibration_version`) via `PurgedChronoSplitter` (`recorded_available_utc <= val_freeze_ts - 48h` `[BUDGET]`), `ReplayAsOf` air-gap, and `B = 2,000` `[BUDGET]` paired bootstrap promotion (`p < 0.10` `[TARGET]`) evaluated strictly on **full-universe `BSS_univ`** so `GEPA` cannot game scores by learning to abstain!
 
 ---
 
@@ -611,7 +638,7 @@ Per `§0.7` Rule 6, **every gate maps to exactly one primary `CLAIM-XX`**, and e
 | `GATE-08` | `CLAIM-03` | `SUB-03` | `bitemporal_and_template_catalog_matrix.rs` | All `8` `[MEASURED]` `templates/*.tmpl` match SHA-256 (`362d5386...` `[MEASURED]`), union-strictness, `Q = ∅` nullability, & `[HH:MM:00Z, HH:MM:59.999Z]` joins pass `100%` `[TARGET]`. |
 | `GATE-09` | `CLAIM-03` | `SUB-03` | `p_indep_blinding_and_safe_fetch.rs` | `0` `[TARGET]` `p_market` tokens survive `MarketBlindingScrubber` before `p_indep` seal; `SafeExternalFetch` blocks IPv6 loopback, IMDS, & `TTL=0` rebinding `100%` `[TARGET]`. |
 | `GATE-10` | `CLAIM-04` | `SUB-02` | `orderbook_microstructure_mark.rs` | `BookMarkPrice` flags `< \$100` `[BUDGET]` / `> 800 bps` `[BUDGET]` stub books (`[MEASURED]`) and keeps tight `1¢–2¢` `[UPSTREAM-SPEC]` books unpenalized (`φ_liq > 0.50` `[MEASURED]`). |
-| `GATE-11` | `CLAIM-04` | `SUB-02` | `forecastbench_median_backfill.rs` | Gateway-masked Metaculus/Dataset questions populate `p_market` / `crowd_prior` from `forecastbench-datasets` (`available_utc <= as_of_utc`) with `100%` `[MEASURED]` parity. |
+| `GATE-11` | `CLAIM-04` | `SUB-02` | `metaculus_client_cdf_and_median_backfill.rs` | `MetaculusCdfBuilder` enforces `201`/discrete `inbound_outcome_count+1`, `zero_point` log-scale, open/closed bounds, & `5e-5 <= Δcdf <= 0.59` (`[MEASURED]`); gateway-masked medians backfill from `forecastbench-datasets` at `100%` `[MEASURED]` parity. |
 | `GATE-12` | `CLAIM-04` | `SUB-02` | `domain_gate_and_cluster_alignment.rs` | `300`-question `[BUDGET]` benchmark achieves `>= 0.92` `[TARGET]` precision and `>= 0.90` `[TARGET]` recall on Geo/Macro/Cyber filtering. |
 | `GATE-13` | `CLAIM-05` | `SUB-04` | `conjugate_stream_decay_and_novelty.rs` | Audits `HYP-05A..05C`: log-odds `"Still"` invariance (`Δθ = 0` `[MEASURED]`), `0.80 + Up` monotonicity (`[MEASURED]`), grid-consistent `CumulativeStoppingTime` hazard decay, and clipped novelty overconfidence reduction (`[HYPOTHESIS]`). |
 | `GATE-14` | `CLAIM-05` | `SUB-04` | `fold_martingale_voi_and_cyber_kz.rs` | Audits `HYP-05D..05F`: monotone CAS tombstones, Fréchet-feasible Martingale `VoI_log` (`fold >= 2`, fat-tail `KL >= 0.50` `[BUDGET]`), and centered-LLR King-Zeng `2610.04798` `ECE < 0.005` `[TARGET]`, `BSS > 0.08` `[TARGET]`. |

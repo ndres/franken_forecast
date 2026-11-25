@@ -165,6 +165,9 @@ def main() -> None:
             fail(f"§0.7 Rule 8 scope violation: forbidden token {forbidden!r} present in master plan")
     if "43497" not in text:
         fail("§5 missing Metaculus Notebook 43497 competitive bot patterns reference")
+    for req_fe in ("45615", "AskNews", "MetaculusCdfBuilder", "forecasting-tools"):
+        if req_fe not in text:
+            fail(f"Missing required FutureEval / Rust Metaculus client reference: {req_fe}")
 
     # 4. Canonical Subsystem Names (SUB-01 .. SUB-08)
     for sub_id, sub_name in EXPECTED_SUBSYSTEMS:

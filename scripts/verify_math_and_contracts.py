@@ -721,4 +721,68 @@ with tempfile.TemporaryDirectory() as tmpu:
     assert abs(sc["pct_revisions_improving_score"][0] - 0.75) < 1e-9
     assert abs(sc["pct_revisions_improving_score"][1] - (4.0 / 6.0)) < 1e-9
 
+# Pure-Rust MetaculusCdfBuilder reference contract (port of Metaculus/forecasting-tools NumericDistribution)
+def build_metaculus_cdf(
+    percentiles, lower_bound, upper_bound, open_lower, open_upper,
+    zero_point=None, inbound_outcome_count=None, min_step=5e-5, max_step=0.59,
+):
+    n = 201 if inbound_outcome_count is None else (inbound_outcome_count + 1)
+
+    def to_unit(x):
+        if zero_point is not None:
+            return math.log((x - zero_point) / (lower_bound - zero_point)) / math.log((upper_bound - zero_point) / (lower_bound - zero_point))
+        return (x - lower_bound) / (upper_bound - lower_bound)
+
+    # Map (value, prob) anchors to normalized [0, 1] x-axis
+    pts = sorted((to_unit(v), p) for v, p in percentiles)
+    lo_val = max(0.001, pts[0][1]) if open_lower else 0.0
+    hi_val = min(0.999, pts[-1][1]) if open_upper else 1.0
+    knots = [(0.0, lo_val)] + [(x, p) for x, p in pts if 0.0 < x < 1.0] + [(1.0, hi_val)]
+
+    cdf = []
+    for i in range(n):
+        t = i / (n - 1)
+        # Piecewise linear interpolation over knots
+        val = knots[-1][1]
+        for j in range(len(knots) - 1):
+            x0, y0 = knots[j]
+            x1, y1 = knots[j + 1]
+            if x0 <= t <= x1:
+                frac = 0.0 if x1 == x0 else (t - x0) / (x1 - x0)
+                val = y0 + frac * (y1 - y0)
+                break
+        cdf.append(val)
+
+    # Enforce strict monotonicity & Metaculus API bounds: min_step <= Δcdf <= max_step
+    cdf[0] = max(0.001, cdf[0]) if open_lower else 0.0
+    cdf[-1] = min(0.999, cdf[-1]) if open_upper else 1.0
+    for i in range(1, n):
+        cdf[i] = max(cdf[i], cdf[i - 1] + min_step)
+        cdf[i] = min(cdf[i], cdf[i - 1] + max_step)
+    # Rescale interior linearly if upper endpoint overshot while keeping endpoints exact
+    span_cur = cdf[-1] - cdf[0]
+    target_hi = min(0.999, cdf[-1]) if open_upper else 1.0
+    span_tgt = target_hi - cdf[0]
+    if span_cur > 0 and abs(cdf[-1] - target_hi) > 1e-12:
+        c0 = cdf[0]
+        cdf = [c0 + (c - c0) * (span_tgt / span_cur) for c in cdf]
+    cdf[0] = max(0.001, cdf[0]) if open_lower else 0.0
+    cdf[-1] = target_hi
+    return cdf
+
+# 1) Continuous 201-point closed-bounds linear CDF
+cdf_lin = build_metaculus_cdf([(20, 0.10), (50, 0.50), (80, 0.90)], 0.0, 100.0, False, False)
+assert len(cdf_lin) == 201 and cdf_lin[0] == 0.0 and cdf_lin[-1] == 1.0
+assert all(5e-5 - 1e-12 <= cdf_lin[i] - cdf_lin[i - 1] <= 0.59 + 1e-12 for i in range(1, 201))
+
+# 2) Continuous 201-point open-bounds log-scaled (zero_point=0.0) CDF
+cdf_log = build_metaculus_cdf([(10, 0.15), (100, 0.55), (1000, 0.85)], 1.0, 10000.0, True, True, zero_point=0.0)
+assert len(cdf_log) == 201 and cdf_log[0] >= 0.001 and cdf_log[-1] <= 0.999
+assert all(5e-5 - 1e-12 <= cdf_log[i] - cdf_log[i - 1] <= 0.59 + 1e-12 for i in range(1, 201))
+
+# 3) Discrete question (inbound_outcome_count = 15 -> 16-point CDF)
+cdf_disc = build_metaculus_cdf([(3, 0.20), (8, 0.60), (12, 0.90)], 0.0, 15.0, False, True, inbound_outcome_count=15)
+assert len(cdf_disc) == 16 and cdf_disc[0] == 0.0 and cdf_disc[-1] <= 0.999
+assert all(5e-5 - 1e-12 <= cdf_disc[i] - cdf_disc[i - 1] <= 0.59 + 1e-12 for i in range(1, 16))
+
 print("ALL_EXTENDED_VALIDATION_CHECKS_PASSED")
