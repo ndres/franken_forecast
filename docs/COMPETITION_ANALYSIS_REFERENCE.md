@@ -9,7 +9,8 @@
 | **[01. `No-Stream/nostreambot-metaculus-bot`](#competitor-01--no-streamnostreambot-metaculus-bot)** | `gemini-4-hydrogen-research` (`317k` LOC, `389` test files) | **15th / 277** Summer 2026 FutureEval (`~3,240` spot peer pts / `256` Qs, above all-bots ensemble) | FutureEval, MiniBench, Metaculus Cup, **Mantic Crucible** | Python 3.12 (`forecasting-tools`), GitHub Actions + `cron-job.org` | Battle-tested Mantic support, close-aware time budgeting, 4-rung fidelity-checked extraction ladder, shared-brief verification gap-fill, 389 offline tests w/ socket egress guard | Single-shot (zero longitudinal updating), `~\$2.60/Q` flat spend (no ForecastBench), no pre-seal market blinding, no bi-temporal vintage discipline, heavy Python framework monkeypatching |
 | **[02. `Schokolade12138/metac-bot-template`](#competitor-02--schokolade12138metac-bot-template-sakuraqkl)** | `main` (`+1,450` LOC over `metac-bot-template`, `3` test files) | Fall 2026 FutureEval entrant (`sakuraqkl`, lightweight fork) | FutureEval + MiniBench (`bot-testing-area` smoke test) | Python (`forecasting-tools`, OpenRouter `paid`/`free` profiles), GitHub Actions | Zero-key free research (Google News RSS + Polymarket/Manifold public search), iterative fixed-point MC simplex flooring, 2-tier credit auto-downgrade (`< \$8` cheap, `< \$0.50` stop), cross-vendor failover retry, type-stratified smoke test | Silent exit-0 crash swallowing, zero numeric/date/Mantic guards, blind `[:40_000]` research truncation, no market blinding, no resolution-source fetch or gap-fill, no longitudinal updating |
 | **[03. `Poke1997/metac-firefly26710`](#competitor-03--poke1997metac-firefly26710)** | `main` @ `4e675a5` (`4,322` LOC, `0` test files) | Fall 2026 FutureEval + Metaculus Cup entrant | FutureEval, Metaculus Cup, `test_bot` | Python (`forecasting-tools`, Anthropic-only + `bot-data` git branch + Claude `review-bot` skill) | **Control/Control/Challenger** bounded-risk live A/B slots, auto-expiring **shadow forecasts** (`SHADOWS_UNTIL`), shared-context prompt-cache splitting, 4-tier billing-cycle budget pacing (`70%/90%/100%`), daily `model_watch`, cheapest-first read-only `review-bot` skill | Single-vendor (Anthropic-only) monoculture, `0` automated tests, GitHub Actions cache budget ledger (eviction resets spend), no numeric/Mantic/ForecastBench guards, no longitudinal updating or market blinding |
-| *(Reserved: Competitor 04)* | *Pending next analysis* | — | — | — | — | — |
+| **[04. `evjohn0418-arch/metac-bot-template`](#competitor-04--evjohn0418-archmetac-bot-template)** | `main` (`55` commits, `4` test files / `~1,800` LOC tests) | Fall 2026 FutureEval + MiniBench live entrant (`~\$0.09–\$0.15/Q` real spend) | FutureEval (`main`) + MiniBench + `bot-testing-area` | Python (`forecasting-tools` untouched `main.py` + `agent/{guard,coverage,probe}.py`), GitHub Actions | Prize-weighted season spend planner (`4` main vs `2` MiniBench), real billing-delta cost calibration (`usage_before[t+1] - usage_before[t]`), `max_tokens` + `inflight_share` pre-auth batching, `skip_after_spot_scoring_time`, `\$0` HTTP 402 cutoff probe, quiet-period alarms + secret scrubbing, `parser.temperature=0` | Unchanged starter prompts/research, **zero probability/numeric/Mantic guards**, no resolution-source fetch or gap-fill, GitHub Actions fork auto-disabled workflows (20.7h outage), single-shot only, no ForecastBench or market blinding |
+| *(Reserved: Competitor 05)* | *Pending next analysis* | — | — | — | — | — |
 
 ---
 
@@ -188,3 +189,36 @@ Instead, **fold six high-ROI upgrades incrementally into `Plan v2.1` and `M1`** 
 1. **Single-Vendor Monoculture (Anthropic-Only):** All slots (`FORECASTER`, `ECONOMY`, `HELPER`) are Claude models—zero cross-vendor diversity against correlated lab blind spots.
 2. **Zero Automated Tests (`0` test files):** No `pytest`/`unittest` suite, no extraction ladder, no numeric/date/Mantic guards, and a live bug in `track_record.py:61` (`open(..., "w")` overwrites the history CSV instead of appending).
 3. **Fragile Cache-Backed Budget State & Single-Shot Pipeline:** Storing `.budget/ledger.json` in GitHub Actions cache risks silent spend resets on cache eviction (`fcast`'s `fsqlite` WAL `daemon_budget_ledger` is durable), and there is no longitudinal `ForecastRevision` updating, no pre-seal market blinding, and no bi-temporal vintage discipline.
+
+---
+
+## Competitor 04 · `evjohn0418-arch/metac-bot-template`
+
+* **Repository Diff:** `https://github.com/Metaculus/metac-bot-template/compare/main...evjohn0418-arch:metac-bot-template:main` (`55` commits; `agent_bot.py` + `agent/{guard,coverage,probe}.py` + `4` pytest files totaling `~1,800` LOC + live `records/decisions.md` & `runs.jsonl`)
+* **Competitions Targeted:** **Metaculus FutureEval (`main`) + MiniBench** (plus `bot-testing-area`). Does **not** target Mantic Crucible, Metaculus Cup, or ForecastBench.
+
+### 1. High-Leverage Operational & Spend-Engineering Ideas Unique to `evjohn0418-arch`
+
+1. **Prize-Weighted Season Spend Planner & Real-Usage Cost Calibration (`agent/guard.py`, `records/decisions.md`):**
+   * Allocates ensemble depth by **prize density** (`4` forecasts/Q on `main` vs. `2` on `minibench`, reflecting `~9×` prize per question on `main`) and paces across remaining season days (`last_open_date × expected_questions_per_day`), trimming `predictions_per_question` down to `min_predictions_per_question` if credits run tight rather than burning out mid-season.
+   * **Crucial billing discovery:** `forecasting-tools`'s `MonetaryCostManager` overstated real spend by `2–3×`, while OpenRouter posts late charges *after* a run ends—so true cost is calibrated from `usage_before[run_{t+1}] - usage_before[run_t]`.
+   * *Adoption in `fcast`:* Calibrate `QuestionMetaForecast` (`§12.2`) and `daemon_budget_ledger` against **provider billing deltas** rather than local token-table estimates alone, and weight tournament VoI by prize density.
+2. **Worst-Case `max_tokens` Pre-Authorization Batching (`inflight_share`) & `\$0` Cutoff Probe (`agent/probe.py`):**
+   * OpenRouter pre-authorizes requests at their **worst-case `max_tokens` price**; capping `max_tokens` per model and sizing parallel batch concurrency so `worst_case_in_flight <= 0.5 * remaining_balance` prevents spurious HTTP `402` failures on small balances.
+   * `agent/probe.py` verifies the provider spending cutoff for `\$0` by sending one tiny request with `max_tokens` priced just above `remaining_balance` and confirming HTTP `402`.
+3. **Spot-Scoring-Time Cutoff Skip (`skip_after_spot_scoring_time: true`):**
+   * Skips forecasting any FutureEval question whose `spot_scoring_time` has already passed, avoiding wasted spend on questions that can no longer earn spot peer points.
+   * *Adoption in `fcast`:* Add `spot_scoring_time` directly to `M1` `MetaculusQuestion` + `TimeBudget` intake gating!
+4. **Quiet-Period Alarm Rate Limiting (`should_alarm`) + Secret Scrubbing (`guard.scrub`):**
+   * Avoids both alert fatigue and silent exit-`0` blindness by exiting non-zero at most once per quiet period, and scrubs every secret env token out of error strings before logging.
+5. **Empirical Parser & Scheduler Incidents Logged in `records/decisions.md`:**
+   * **Pin `parser.temperature = 0`:** Dual-sample `structure_output` dropped MC forecasts twice when non-zero temperature produced two different parses.
+   * **GitHub Actions Fork Auto-Disable Outage (Nov 24, 2026):** Running a `10`-minute cron on a fork caused GitHub to auto-disable workflows (*"to reduce compute wasted"*), causing a `20.7`-hour outage and `3` missed main questions—directly validating **`fcastd` (`Metronome`) local daemon scheduling (`§13`)** over GitHub Actions crons.
+6. **Post-Start Coverage Audit (`agent/coverage.py`):**
+   * Separates `missed_before_bot_started` from `missed_after_bot_started` across `open`/`closed`/`resolved` statuses (useful denominator filter for mid-season joins in `Crucible`).
+
+### 2. Where `evjohn0418-arch` Falls Short
+
+1. **Untouched Starter Template (`main.py`) & Zero Forecasting Upgrades:** Uses default template prompts and AskNews/Sonar-Pro only—zero resolution-source fetching, zero gap-fill, zero time-series anchors, zero value-extraction fidelity ladder.
+2. **Zero Probability / Numeric / Mantic Guards:** `agent/guard.py` is strictly a *spend* guard—there is no binary `[0.02, 0.98]` clamp, no MC simplex floor, no PCHIP/discrete/Mantic `>= 5%` open-tail floor, and no `THIN_PUBLISH_FLOOR`.
+3. **Single-Shot Only, No Pre-Seal Market Blinding, No Bi-Temporal Discipline, No Mantic or ForecastBench.**
