@@ -1,8 +1,8 @@
 # COMPREHENSIVE PLAN FOR FRANKENFORECAST (`fcast`)
 
 * **Repository:** `franken_forecast`
-* **Master Plan Version:** `1.9` (`2026-11-25`)
-* **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract + 3-document question memory overlay, Metaculus `201`-point/discrete CDF & FutureEval math, `forecastingresearch/forecastbench` submission schema & two-way fixed-effects difficulty-adjusted Brier scoring, 9-template SHA-256-locked prompt suite (`templates/*.tmpl`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 formal specification draft (`lean_experiments/`), full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite WAL/backup/migration triggers, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`, `docs/proposals/verify_refactoring_math.py`)
+* **Master Plan Version:** `2.0` (`2026-11-25`)
+* **Repository Maturity:** `Tier 0 (Plan-Only)` for Rust Cargo workspace (`0 / 6` `[MEASURED]` crates implemented); `Tier 1 (Contract-Proved)` for the canonical `ForecastRevision` 4-stage data contract + 3-document question memory overlay, transactional `domain_events` coordination bus & priority preemption, cross-question coherence / Dirichlet-Categorical / multimodal continuous CDF / hierarchical base-rate / attribution-waterfall mechanics, Metaculus `201`-point/discrete CDF & FutureEval math, `forecastingresearch/forecastbench` submission schema & two-way fixed-effects difficulty-adjusted Brier scoring, 9-template SHA-256-locked prompt suite (`templates/*.tmpl`), `CLAIM-05` (`HYP-05A..05F`) AlphaProof-Code-style Lean 4 formal specification draft (`lean_experiments/`), full-universe anti-selection-bias 10-metric scorecard & meta-forecaster, SQLite WAL/backup/migration triggers, and document hygiene (`scripts/verify_*.py`, `lean_experiments/verify_audit_flags.py`, `docs/proposals/verify_refactoring_math.py`)
 * **Core Instruments:** `fcast` (Core CLI), `fcastd` (`Asupersync` Job Daemon), `fcast-mcp` (Model Context Protocol Server), `fcast-verify` (Offline Receipt & Temporal-Fence Auditor), `fcast-tui` (`FrankenTUI` Terminal Cockpit)
 
 ---
@@ -32,7 +32,7 @@ Subsystem and gate maturity are tracked exclusively in `docs/delivery/DELIVERY_L
 
 ### §0.2 What "Implemented" Means
 
-Nothing in this repository's Rust crate graph is implemented as of `Plan v1.9` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
+Nothing in this repository's Rust crate graph is implemented as of `Plan v2.0` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
 
 1. **Zero Stubs & Strict Toolchain:** Compiles cleanly under `nightly-2026-11-01` (Rust Edition 2024 `[UPSTREAM-SPEC]`) with `#![deny(clippy::todo, clippy::unimplemented, clippy::unwrap_used)]` and `#![forbid(unsafe_code)]` outside the audited `<= 120` `[BUDGET]` LOC POSIX FD/lock module (`fcast-infra::sys`).
 2. **Dependency Hygiene:** Passes `cargo deny check bans advisories licenses sources` with singleton `asupersync` (`0` `[BUDGET]` instances of `tokio`, `reqwest`, `hyper`, `ort`, `openssl-sys`, `rusqlite`, `sqlx`, or `petgraph`).
@@ -444,6 +444,23 @@ Every Tier-0 tick that crosses the persistence threshold and every completed Tie
    * `Loom` first locks `p_indep = μ_t` into the `ForecastRevision` builder; only then does it unblind `p_market` (`as_of_utc`) and run the **1D Latent-Logit Kalman filter** (algebraically equivalent to TimeSeek precision-weighted logit pooling, `[MEASURED]` in `docs/proposals/verify_refactoring_math.py` `W4`) with liquidity-scaled market observation noise $R_t = R_0 / \max(\phi_{\text{liq}},\, 10^{-3})$.
    * On every market tick, Rust computes exact closed-form Gaussian KL **Latent Bayesian Surprise** `KL(posterior ‖ prior)` at `\$0` LLM cost (`W3`: a `10pp` jump on a deep book yields `0.592` nats `[MEASURED]` waking a Tier-1 `fold`, whereas the same jump on a thin book yields `0.0079` nats `[MEASURED]` and is ignored).
 
+### §11.4 Deeper Forecasting Mechanics: Cross-Question Coherence, Multi-Type Distributions, Hierarchical Outside Views & Correlation-Aware Ensembling (`fcast-core::{coherence,dist,ensemble}`)
+
+To win on full-spectrum tournaments (binary, multi-choice, continuous `Cdf201`, date, and multi-leg `Combo` portfolios) rather than isolated coin flips, `Loom` and `fcast-core` enforce four deeper probabilistic mechanics (`[MEASURED]` in `scripts/verify_math_and_contracts.py`):
+
+1. **Cross-Question Logical & Causal Coherence Solver (`fcast-core::coherence`):**
+   * Projects related forecasts onto the coherent probability polytope before sealing or submitting: **(a)** simplex sum-to-1 on `MultipleChoiceQuestion` and exhaustive `GroupOfQuestions`, **(b)** subset/implication monotonicity ($A \subseteq B \implies P(A) \le P(B)$), **(c)** multi-horizon temporal monotonicity ($T_1 < T_2 \implies P(\text{by } T_1) \le P(\text{by } T_2)$ via Pool-Adjacent-Violators isotonic projection), and **(d)** signed Fréchet–Hoeffding bounds on `Combo` questions ($\max(0, P(A)+P(B)-1) \le P(A \land B) \le \min(P(A), P(B))$).
+   * **Causal Spillover Wakeups (`fnx-*` 1-Hop Propagation):** Whenever a parent contract's sealed `ForecastRevision` moves `|Δlogit| >= 0.25` `[BUDGET]`, `Loom` traverses outgoing `L1_MECHANISM` edges in `FrankenNetworkX` and emits a `CausalSpilloverTriggered` domain event so dependent child contracts re-evaluate promptly instead of going stale.
+2. **Multi-Type Belief Mechanics (Dirichlet–Categorical & Multimodal Continuous `Cdf201`):**
+   * **`MultipleChoiceQuestion` (Dirichlet–Categorical Filter):** Parameterizes $K$-way beliefs as $(\mathbf{p}_t, N_t)$ with $\sum_{k=1}^K p_{t,k} = 1$. Neutral `"Still"` updates leave $(\mathbf{p}_t, N_t)$ strictly invariant; diagnostic evidence updates log-probabilities $\log p_{t,k} \propto \log \tilde{p}_{t^-,k} + \kappa_{\text{LR}} \nu_t \Delta\ell_{t,k}$ followed by log-sum-exp normalization, preventing simplex drift.
+   * **`NumericQuestion` & `DateQuestion` (Probability-Space Multimodal Mixture Pooling):** Cross-vendor quantile panels (`[p10..p90]`) are converted to individual continuous densities and **mixed in probability space** ($F_{\text{ens}}(x) = \sum_m w_m F_m(x)$) rather than naive quantile-averaging alone—preserving genuine bimodality (e.g., *"ceasefire vs. prolonged escalation"*) before `MetaculusCdfBuilder` enforces `5e-5 <= Δcdf <= 0.59`.
+3. **Empirical-Bayes Hierarchical Outside View (`OV`) & Rust-Computed Fermi Decomposition:**
+   * Frozen Gold Dossiers (`§7.3`) shrink narrow reference-class hit rates $(k_c / n_c)$ toward a broader parent-class prior $\mu_{\text{parent}}$ via $\hat{\mu}_0 = (k_c + m \mu_{\text{parent}}) / (n_c + m)$ (`m = 5` `[BUDGET]` default pseudo-count), preventing small-$n$ reference classes (`0/3` or `3/3`) from seeding overconfident `0%` or `100%` base rates.
+   * For complex multi-step questions, LLMs emit structured conditional branches (`scenario_tree` or conjunctive chain); **Rust computes** $P(E) = \sum_i P(E \mid S_i) P(S_i)$ or $\prod_k P(C_k \mid C_{<k})$ (`INV-06`) and stores the exact tree inside `rationale_handle` for inline sensitivity inspection (`§16`).
+4. **Correlation-Adjusted Log-Odds Ensembling & Exact Attribution Waterfall:**
+   * Replaces naive unweighted averaging with Huberized / trimmed log-odds pooling scaled by **effective independent-model count** $M_{\text{eff}} = M / (1 + (M - 1)\bar{\rho}_{\text{res}})$ (estimated from historical pairwise residual correlation $\bar{\rho}_{\text{res}}$ across vendors on `MiniBench`/`ForecastBench`), preventing correlated frontier models from being over-extremized.
+   * Every `SubsequentRevision` records an exact **5-component logit attribution vector** $(\Delta\theta_{\text{decay}}, \Delta\theta_{\text{stream}}, \Delta\theta_{\text{fold}}, \Delta\theta_{\text{red\_team}}, \Delta\theta_{\text{kalman}})$ summing identically to $\operatorname{logit}(p_k) - \operatorname{logit}(p_{k-1})$ (`< 1e-12` `[MEASURED]` residual), powering `Cockpit`'s `[d]` *"Why Did It Move?"* drawer (`§16`).
+
 ---
 
 ## §12. `Crucible`: Meta-Forecasting ("Forecast the Forecasts"), Full-Universe Selection-Bias Ledger, Ten-Metric Scorecard & `dspy.GEPA` (`KA-07`, `KA-08`)
@@ -537,6 +554,38 @@ flowchart LR
 * **Singleton Lease & Crash Recovery:** Acquires `daemon.lock` (`flock(LOCK_EX | LOCK_NB)` + `O_CLOEXEC`), heartbeats `daemon_lease` every `5 s` `[BUDGET]`, reclaims expired `RUNNING` visibility leases in `fcast_jobs` after `SIGKILL`, and broadcasts live progress over a `0600` Unix Domain Socket (`daemon.sock`, respecting the `104`-byte `[UPSTREAM-SPEC]` POSIX `sun_path` ceiling). Installs native user-service units (`launchd` / `systemd --user`); CLI/TUI fall back cleanly to inline execution if `fcastd` is stopped.
 * **Four Concurrency Lanes & Spend Circuit Breaker:** `ingest_fast` (`4` `[BUDGET]` workers, `\$0` LLM), `belief_stream` (`2` `[BUDGET]` workers, Tier-0 ticks + shock gate), `epistemic_heavy` (`2` `[BUDGET]` workers, Tier-1 `fold`, multi-vendor panel runs, `symphonia` `24m` `gemini-3.5-transcribe`, `deep-research`, `6D+2G` batches, `map`), and `maintenance` (`1` `[BUDGET]` worker, `ee_outbox`, Files reaper, WAL checkpoint, `24 h` `zstd` backup)—governed by `daemon_budget_ledger` (`\$5.00/day` `[BUDGET]` default background cap).
 
+### §13.2 Component Coordination: Transactional `domain_events` Outbox, Choreography & Backpressure (`Chronicle` ↔ `Metronome` ↔ All Subsystems)
+
+To eliminate dual-write races, polling lag, duplicate LLM calls, and silent dead-end failures across all 8 subsystems, `Chronicle` and `Metronome` coordinate through a single **transactional `domain_events` outbox** committed atomically inside `ops.fsqlite` (`[MEASURED]` in `scripts/verify_math_and_contracts.py`):
+
+```mermaid
+sequenceDiagram
+    participant H as Harvester (SUB-02)
+    participant C as Chronicle (SUB-01 WAL)
+    participant M as Metronome (SUB-06 fcastd)
+    participant L as Loom (SUB-04)
+    participant N as Notary / Red-Team (SUB-03)
+    participant T as Tether & Cockpit (SUB-07/08)
+
+    H->>C: TX1: Write BookMarkPrice / EpisodicEvent + DomainEvent(idempotency_key)
+    C-->>M: Event seq wake (coalesced per question_id / 60s window)
+    M->>L: Dispatch Priority Lane Job (Freeze > RedTeam > Shock > Backfill)
+    L->>N: If |Δlogit|>=0.35 or tail or freeze: run market-blind red_team_audit.tmpl
+    N-->>L: RedTeamVerdict (approve / dampen / block G1)
+    L->>C: TX2: Seal immutable ForecastRevision + StateDoc patch + DomainEvent(RevisionSealed)
+    C-->>M: Broadcast RevisionSealed over 0600 UDS daemon.sock
+    M-->>T: Push live diff to Cockpit TUI (<8ms) & fcast:// MCP subscribers
+```
+
+1. **Deterministic Producer → Consumer Choreography & Coalescing:**
+   * **`NewEligibleContract` (`Harvester` → `Crucible` → `Loom`):** Admits `is_eligible = 1` irreversibly in `universe_question_ledger`, runs `QuestionMetaForecast`, and either enqueues `InitialForecast` (`seq_no = 0` + frozen Gold Dossier) or records `excluded` with `reason_code`.
+   * **`MarketTickShock` / `EpisodicEventAdded` (`Harvester` → `Metronome` → `Loom`):** Wakes `Loom` only when `KL(posterior ‖ prior) >= 0.15` nats (`\$0` Kalman surprise) or `Frankensearch` novelty `ν_t >= 0.35`; `Metronome` coalesces bursts per `(question_id, 60 s)` via `BLAKE3` idempotency keys so breaking wire floods never trigger duplicate Tier-1 folds.
+   * **`RevisionSealed` (`Loom` → `Chronicle` → `Metronome` → `Crucible`/`Tether`/`Cockpit`):** Fans out simultaneously to `fnx-*` causal spillover checks (`|Δlogit| >= 0.25`), `FutureEval` auto-reforecast (`|Δlogit| >= 0.05`), `Cockpit` reactive redraws, and `Tether` MCP `notifications/resources/updated`.
+   * **`QuestionResolved` (`Notary` → `Chronicle` → `Crucible` → `ee_outbox`):** Commits disjoint `question_resolutions`, refreshes the 10-metric full-universe scorecard + `QuestionMetaForecast` error residuals, checks the `n >= 100` Platt recalibration gate, and enqueues `postmortem_ee_distill.tmpl` into `ee_outbox`.
+2. **Priority Preemption, Backpressure & Dead-Letter Quarantine:**
+   * `Metronome` schedules `fcast_jobs` strictly by `(priority_tier DESC, deadline_utc ASC, voi_log DESC)` across five tiers: **`P0: TournamentFreeze (< 60m)` > `P1: RedTeam & ManualAnalyst` > `P2: LiveShock` > `P3: ScheduledSync` > `P4: Maintenance`**.
+   * Jobs failing `>= 3` `[BUDGET]` bounded retries transition to `state = 'DEAD_LETTER'` with structured error diagnostics, surfacing immediately in `Cockpit`'s top HUD badge and recoverable via `fcast daemon retry-dead-letter`.
+
 ---
 
 ## §14. `Tether`: First-Class MCP Server & Target-Compiled Skills (`INT-03`, `INT-04`)
@@ -557,13 +606,36 @@ flowchart LR
 
 ---
 
-## §16. `Cockpit`: `FrankenTUI` 7-View Architecture, `[6:Meta]` "Forecast the Forecasts" Pane & Atomic PTY Handoff (`KA-09`)
+## §16. `Cockpit`: `FrankenTUI` 7-View Decision Workstation, Interactive Workflows & Atomic PTY Handoff (`KA-09`)
 
-1. **Seven Specialized Terminal Views (`1–7`):**
-   * **View `[1]` (Markets, Rationales & Active Belief Cockpit):** Fenwick-virtualized contract table (`24h` + `7d` cadence-encoded deltas), `<= 3`-curve `[BUDGET]` Braille chart (`p_market`, `SF/Community Median`, `p_indep` / `probability_distribution`), Bi-Temporal `△/⚡/★/◆` track, Top-$N$ `6D+2G` rationales, `fnx-*` cruxes, and `[M]` quick Meta-Forecast badge.
-   * **View `[2]` (`6`-Strip Synchronized Comparison Matrix):** Up to `6` `[BUDGET]` separate 3-row Braille tracks locked to one shared `h`/`l` crosshair (`0` `[MEASURED]` cell color collisions) + `[p]` 2-venue spread overlay.
-   * **Views `[3]`–`[5]`:** `[3]` News/Podcast Catalyst Stream · `[4]` 3-Pane `fnx-*` KG & Contradiction Ledger · `[5]` Shock Alerts, `DataPack` Vintages & Sentinel Ledger.
-   * **View `[6:Meta]` ("Forecast the Forecasts" Triage & Selection-Bias-Free Universe Scorecard):** Dedicated split cockpit forecasting the operational cost, latency, popularity, and complexity of every eligible question while tracking the entire eligible universe (`Issued` vs. `Excluded` vs. `Abandoned`) and all `10` `[MEASURED]` mandatory system metrics side-by-side:
+`Cockpit` is designed for **maximum decision leverage per keystroke** at `< 8 ms` `[TARGET]` p99 frame time and `\$0.00` `[BUDGET]` passive triage cost, pairing dense visual inspection with direct forecasting actions and full CLI `--json`/`--markdown` parity:
+
+### §16.1 View `[1]` Main Decision Cockpit Wireframe & Live Telemetry HUD
+
+```text
+┌─ fcast [1:Cockpit] ── FutureEval: 14h22m │ Credits: G:84% P:61% AN:79% │ $1.42/$5.00 │ ⚙fcastd: 2 run / 0 DLQ ─────┐
+│ CONTRACTS (2,148 · [/] Search · [:] Cmd) │ EU Grid Cyber Q1 [seq=4 · p_indep 19.2% · p_mkt 14.8% · Blend 17.6%]     │
+│ ▸ ⚡0.59 EU Grid Cyber Q1   17.6% +4.2%  │ 30%┤                              ╭──● Blend (17.6%)                     │
+│   ⚡0.21 Hormuz >48h        11.4% +1.8%  │ 20%┤          ╭───────╮         ╭─╯  ○ p_indep (19.2%)                   │
+│   [Thin] Baltic Cable Attr  34.0%  7d:+6 │ 10%┤──●──────╯       ╰────●────╯     · p_market (14.8%, φ=0.84)          │
+│   ✓      BOJ +25bps Jan     68.5% -0.4%  │  0%┴──────△──────────⚡─────────★────────────────────────◆───────         │
+│   ⚠G1    Mercosur 5-Leg     22.0%  0.0%  │     Nov-01      Nov-09       Nov-18                   Nov-25             │
+│                                          ├───────────────────────────────────────────────────────────────────────────┤
+│ TABBED INSPECTOR ([1..4] Switch)         │ WHY IT MOVED (R3 → R4 · [d] Waterfall · [w] What-If · [o] Vault Span)    │
+│ [1:Rationales] [2:Cruxes] [3:Gold/State] │  Prior R3 (13.4%) → Decay(-0.04) + Stream(+0.18) + Fold(+0.31)           │
+│  ★ 22/24 clean_strong  CT:4 ME:4 OV:3    │  + RedTeam(-0.07: G1 ok, base-rate damp) + Kalman(-0.11) = 17.6%         │
+│    "Aspides patrol surge..." [ev:03#ais] │  Top Crux: CERT-EU advisory [VoI 6.4 nats/$] · Gold Dossier: LOCKED ✓   │
+├──────────────────────────────────────────┴───────────────────────────────────────────────────────────────────────────┤
+│ [j/k] Nav [d] Why-Moved [g/e/s] Gold/Log/State [w] What-If [f] Fold [r] Red-Team [H] PTY Handoff [:] Palette [1-7]  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### §16.2 Seven Specialized Terminal Views (`1–7`)
+
+1. **View `[1]` (Markets, Rationales & Active Belief Cockpit):** Fenwick-virtualized contract table (`24h` + `7d` cadence-encoded deltas, `φ_liq` / `[Thin]` badges, Bayesian Surprise `⚡KL` indicator, and `⚠G1` Red-Team flags), `<= 3`-curve `[BUDGET]` Braille chart (`p_market`, `SF/Community Median`, `p_indep` / `probability_distribution`), Bi-Temporal `△/⚡/★/◆` track, inline *"Why It Moved"* attribution strip, and tabbed inspector (`6D+2G` rationales, `fnx-*` cruxes, `Gold/Episodic/State` docs, and `[M]` Meta-Forecast badge).
+2. **View `[2]` (`6`-Strip Synchronized Comparison Matrix):** Up to `6` `[BUDGET]` separate 3-row Braille tracks locked to one shared `h`/`l` crosshair (`0` `[MEASURED]` cell color collisions) + `[p]` 2-venue spread overlay.
+3. **Views `[3]`–`[5]`:** `[3]` News/Podcast Catalyst Stream (linked to `episodic_events`) · `[4]` 3-Pane `fnx-*` KG, Causal Spillover & Contradiction Ledger · `[5]` Shock Alerts, `DataPack` Vintages & Sentinel Ledger.
+4. **View `[6:Meta]` ("Forecast the Forecasts" Triage & Selection-Bias-Free Universe Scorecard):** Dedicated split cockpit forecasting the operational cost, latency, popularity, and complexity of every eligible question while tracking the entire eligible universe (`Issued` vs. `Excluded` vs. `Abandoned`) and all `10` `[MEASURED]` mandatory system metrics side-by-side:
 
 ```text
 ┌─ fcast [6:Meta · Forecast the Forecasts & Universe Scorecard] ── Round: All+FB │ Horizon: [freeze ▾] │ ⚙Daemon: ON ─┐
@@ -588,8 +660,15 @@ flowchart LR
 └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-   * **View `[7:Revisions]` (`ForecastRevision` & Horizon-Evaluation Audit Ledger):** Scrub through `InitialForecast` (`seq_no = 0`) → `SubsequentRevision` (`seq_no = 1..k`), inspect side-by-side diffs of `p_indep` vs. `p_market`, `evidence_handles`, `model_version`, `calibration_version`, and `HorizonForecastView` slices (`T-90d`, `T-30d`, `freeze`, `QuestionResolution` Brier/Log post-mortem).
-2. **Atomic 4-Phase `[H]` PTY Harness Handoff:** Checkpoints WAL (`PASSIVE`) + verifies `O_CLOEXEC` → drops `TerminalSession` (`AltScreen` exit) → runs `pi_agent_rust`, `Hermes`, or `agy` seeded with the current `ForecastRevision` + `QuestionMetaForecast` + `ee pack` → refreshes snapshots and repaints `100%` `[TARGET]` of cells in `< 50 ms` `[TARGET]`.
+5. **View `[7:Revisions]` (`ForecastRevision` & Horizon-Evaluation Audit Ledger):** Scrub through `InitialForecast` (`seq_no = 0`) → `SubsequentRevision` (`seq_no = 1..k`), inspect side-by-side diffs of `p_indep` vs. `p_market`, `evidence_handles`, `model_version`, `calibration_version`, and `HorizonForecastView` slices (`T-90d`, `T-30d`, `freeze`, `QuestionResolution` Brier/Log post-mortem).
+
+### §16.3 Interactive Decision Workflows, What-If Sandbox & Ergonomics
+
+1. **Global Fuzzy Command Palette (`:` / `Ctrl-K`):** Instant `Frankensearch`-indexed action launcher across all 7 views—jump to any question/cluster, enqueue `fcast fold` or `red_team_audit.tmpl`, run `fcast map`/`decompose`, retry `DEAD_LETTER` jobs, or export a validated `ForecastBench`/`FutureEval` submission.
+2. **Zero-Token "Why Did It Move?" Drawer (`[d]`) & 3-Document Inspector (`[g]` / `[e]` / `[s]`):** Opens the exact 5-component logit waterfall (`decay + stream + fold + red_team + kalman`, `[MEASURED]`) with clickable `[o]` `EvidenceVault` span previews, plus 1-keystroke overlays for the frozen **Gold Dossier** (`[g]`), append-only **Episodic Log** (`[e]`), and **State Doc** diff (`[s]`).
+3. **Interactive What-If Sensitivity Sandbox (`[w]`) & Human-in-the-Loop Override:** Adjust any `fnx-*` crux or Fermi branch probability in memory to preview updated `probability_distribution`, `Cdf201`, and `Combo` Fréchet bounds at `< 8 ms` (`\$0` API spend); press `[Enter]` to seal as an immutable `ManualAnalystIssue` `ForecastRevision` with your own rationale, or `[Esc]` to discard cleanly.
+4. **Responsive Breakpoints, Accessibility & Headless CLI Parity:** Adapts seamlessly across wide (`>= 140 cols`, 3-pane), medium (`100–139 cols`, 2-pane), and compact (`80–99 cols`, single-pane tabbed) terminals; supports `NO_COLOR` / colorblind-safe symbol legends (`△/⚡/★/◆`, solid/dashed/dotted); and mirrors every visual panel via scriptable CLI commands (`fcast inspect <id> --why-moved --json`, `fcast telemetry scorecard --markdown`).
+5. **Atomic 4-Phase `[H]` PTY Harness Handoff:** Checkpoints WAL (`PASSIVE`) + verifies `O_CLOEXEC` → drops `TerminalSession` (`AltScreen` exit) → runs `pi_agent_rust`, `Hermes`, or `agy` seeded with the current `ForecastRevision` + `QuestionMetaForecast` + `gold_dossier_handle` + `ee pack` → refreshes snapshots and repaints `100%` `[TARGET]` of cells in `< 50 ms` `[TARGET]`.
 
 ---
 

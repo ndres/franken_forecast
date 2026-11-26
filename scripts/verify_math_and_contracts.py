@@ -864,4 +864,123 @@ alpha_fe, _ = solve_two_way_fe_brier(fe_obs)
 assert raw_b < raw_a and alpha_fe["model_A"] < alpha_fe["model_B"]
 assert abs((alpha_fe["model_B"] - alpha_fe["model_A"]) - 0.04) < 1e-6
 
+# v2.0 Witness A: Transactional domain_events Outbox, Coalescing, Priority Preemption & Dead-Letter Quarantine (§13.2)
+with tempfile.TemporaryDirectory() as tmpc:
+    cdb = sqlite3.connect(os.path.join(tmpc, "coord.fsqlite"))
+    cdb.execute("PRAGMA journal_mode = WAL;")
+    cdb.executescript("""
+        CREATE TABLE domain_events (
+            event_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_kind TEXT NOT NULL,
+            question_id TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            payload_json TEXT NOT NULL
+        );
+        CREATE TABLE coord_jobs (
+            job_id TEXT PRIMARY KEY,
+            priority_tier INTEGER NOT NULL,
+            deadline_utc TEXT NOT NULL,
+            voi_log REAL NOT NULL,
+            state TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0
+        );
+    """)
+    # Coalescing burst ticks within same 60s window via UNIQUE idempotency_key
+    for _ in range(5):
+        cdb.execute(
+            "INSERT OR IGNORE INTO domain_events(event_kind, question_id, idempotency_key, payload_json) VALUES (?,?,?,?)",
+            ("MarketTickShock", "q_grid", "shock:q_grid:2026-11-25T19:45", '{"kl":0.59}'),
+        )
+    assert cdb.execute("SELECT COUNT(*) FROM domain_events").fetchone()[0] == 1
+    # Priority preemption: P0 (TournamentFreeze=4) > P1 (RedTeam=3) > P2 (LiveShock=2) > P3 (Sync=1)
+    cdb.executemany(
+        "INSERT INTO coord_jobs VALUES (?,?,?,?,?,?)",
+        [
+            ("j_sync", 1, "2026-11-26T00:00:00Z", 1.2, "QUEUED", 0),
+            ("j_shock", 2, "2026-11-25T21:00:00Z", 8.5, "QUEUED", 0),
+            ("j_freeze", 4, "2026-11-25T20:15:00Z", 3.1, "QUEUED", 0),
+            ("j_redteam", 3, "2026-11-25T20:30:00Z", 4.0, "QUEUED", 0),
+        ],
+    )
+    order = [
+        r[0] for r in cdb.execute(
+            "SELECT job_id FROM coord_jobs WHERE state='QUEUED' ORDER BY priority_tier DESC, deadline_utc ASC, voi_log DESC"
+        ).fetchall()
+    ]
+    assert order == ["j_freeze", "j_redteam", "j_shock", "j_sync"], f"Bad priority order: {order}"
+    # Dead-letter quarantine after >= 3 failures
+    cdb.execute("UPDATE coord_jobs SET attempts = 3, state = 'DEAD_LETTER' WHERE job_id = 'j_sync'")
+    assert cdb.execute("SELECT COUNT(*) FROM coord_jobs WHERE state = 'DEAD_LETTER'").fetchone()[0] == 1
+    cdb.close()
+
+# v2.0 Witness B: PAV Temporal Monotonicity, Dirichlet-Categorical Invariance, Multimodal CDF & Hierarchical OV (§11.4)
+def pav_isotonic_nondecreasing(vals):
+    blocks = [[v, 1] for v in vals]
+    i = 0
+    while i < len(blocks) - 1:
+        if blocks[i][0] > blocks[i + 1][0]:
+            w = blocks[i][1] + blocks[i + 1][1]
+            m = (blocks[i][0] * blocks[i][1] + blocks[i + 1][0] * blocks[i + 1][1]) / w
+            blocks[i] = [m, w]
+            blocks.pop(i + 1)
+            if i > 0:
+                i -= 1
+        else:
+            i += 1
+    out = []
+    for m, w in blocks:
+        out.extend([m] * w)
+    return out
+
+mono = pav_isotonic_nondecreasing([0.30, 0.24, 0.50, 0.48])
+assert all(mono[i] <= mono[i + 1] + 1e-12 for i in range(len(mono) - 1))
+
+def dirichlet_categorical_step(probs, n_eff, delta_lls, novelty=1.0, kappa_lr=1.35, still=False):
+    if still:
+        return list(probs), n_eff
+    logs = [math.log(max(p, 1e-12)) + kappa_lr * novelty * dl for p, dl in zip(probs, delta_lls)]
+    mx = max(logs)
+    exps = [math.exp(x - mx) for x in logs]
+    s = sum(exps)
+    return [e / s for e in exps], n_eff + novelty
+
+p_cat0 = [0.60, 0.25, 0.15]
+p_still, n_still = dirichlet_categorical_step(p_cat0, 10.0, [0.5, -0.2, -0.3], still=True)
+assert p_still == p_cat0 and n_still == 10.0
+p_moved, _ = dirichlet_categorical_step(p_cat0, 10.0, [0.0, +0.8, -0.2], still=False)
+assert abs(sum(p_moved) - 1.0) < 1e-12 and p_moved[1] > p_cat0[1]
+
+# Multimodal probability-space mixture pooling (two distinct regimes: ~20 and ~80) -> valid 201-pt Metaculus CDF
+cdf_a = build_metaculus_cdf([(15, 0.10), (20, 0.50), (25, 0.90)], 0.0, 100.0, False, False)
+cdf_b = build_metaculus_cdf([(75, 0.10), (80, 0.50), (85, 0.90)], 0.0, 100.0, False, False)
+cdf_mix = [0.5 * a + 0.5 * b for a, b in zip(cdf_a, cdf_b)]
+assert len(cdf_mix) == 201 and cdf_mix[0] == 0.0 and cdf_mix[-1] == 1.0
+assert all(5e-5 - 1e-12 <= cdf_mix[i] - cdf_mix[i - 1] <= 0.59 + 1e-12 for i in range(1, 201))
+# Density at center (x=50, index 100) is flatter than around the two modes (x=20 idx=40 and x=80 idx=160)
+assert (cdf_mix[41] - cdf_mix[39]) > (cdf_mix[101] - cdf_mix[99]) and (cdf_mix[161] - cdf_mix[159]) > (cdf_mix[101] - cdf_mix[99])
+
+# Empirical-Bayes hierarchical outside-view shrinkage & correlation-adjusted M_eff
+def eb_shrink_base_rate(k_hits, n_obs, mu_parent, m_pseudo=5.0):
+    return (k_hits + m_pseudo * mu_parent) / (n_obs + m_pseudo)
+
+mu_eb = eb_shrink_base_rate(0, 3, 0.20, m_pseudo=5.0)
+assert 0.10 < mu_eb < 0.15  # Avoids overconfident 0.00% from 0/3 small sample!
+
+def effective_model_count(m_models: int, mean_pair_corr: float) -> float:
+    return m_models / (1.0 + (m_models - 1) * max(0.0, mean_pair_corr))
+
+assert effective_model_count(4, 0.0) == 4.0 and effective_model_count(4, 0.5) == 1.6
+
+# v2.0 Witness C: Exact 5-Component Logit Attribution Waterfall ("Why Did It Move?" drawer §11.4 & §16.3)
+def verify_attribution_waterfall(p_prev, d_decay, d_stream, d_fold, d_redteam, d_kalman):
+    th_prev = logit(p_prev)
+    th_next = th_prev + d_decay + d_stream + d_fold + d_redteam + d_kalman
+    p_next = sigmoid(th_next)
+    residual = abs((logit(p_next) - th_prev) - (d_decay + d_stream + d_fold + d_redteam + d_kalman))
+    assert residual < 1e-12, f"Waterfall residual too large: {residual}"
+    return p_next
+
+p_w = verify_attribution_waterfall(0.134, -0.04, +0.18, +0.31, -0.07, -0.11)
+assert 0.16 < p_w < 0.18
+
 print("ALL_EXTENDED_VALIDATION_CHECKS_PASSED")

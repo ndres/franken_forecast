@@ -145,10 +145,15 @@ def main() -> None:
         "### §7.1",
         "### §7.2",
         "### §7.3",
+        "### §11.4",
         "### §12.2",
         "### §12.3",
         "### §12.4",
         "## Part III ·",
+        "### §13.2",
+        "### §16.1",
+        "### §16.2",
+        "### §16.3",
         "View `[6:Meta]`",
         "## Part IV ·",
         "## Part V ·",
@@ -184,6 +189,11 @@ def main() -> None:
         "cass search",
         "Bayesian Surprise",
         "Platt",
+        "domain_events",
+        "DEAD_LETTER",
+        "Dirichlet",
+        "What-If",
+        "Command Palette",
     ):
         if req_fe not in text:
             fail(f"Missing required FutureEval / ForecastBench / FrankenSuite / v1.9 reference: {req_fe}")
