@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub const MIGRATION_0001_SQL: &str = include_str!("../migrations/0001_init.sql");
+pub const MIGRATION_0002_SQL: &str = include_str!("../migrations/0002_cyber_shift.sql");
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -23,7 +24,9 @@ pub enum StoreError {
     Core(#[from] fcast_core::forecast::ForecastError),
     #[error("blinding error: {0}")]
     Blinding(#[from] fcast_core::blinding::BlindingError),
-    #[error("TEMPORAL_FENCE_VIOLATION: handle {handle} available_utc={available_utc} > as_of_utc={as_of_utc}")]
+    #[error(
+        "TEMPORAL_FENCE_VIOLATION: handle {handle} available_utc={available_utc} > as_of_utc={as_of_utc}"
+    )]
     TemporalFenceViolation {
         handle: String,
         available_utc: String,
@@ -33,7 +36,9 @@ pub enum StoreError {
     MissingEvidenceHandle(String),
     #[error("integrity check failed: {0}")]
     IntegrityFailed(String),
-    #[error("daily budget circuit breaker tripped: spent={spent_usd:.2} + est={est_usd:.2} > cap={cap_usd:.2}")]
+    #[error(
+        "daily budget circuit breaker tripped: spent={spent_usd:.2} + est={est_usd:.2} > cap={cap_usd:.2}"
+    )]
     BudgetCapExceeded {
         spent_usd: f64,
         est_usd: f64,
@@ -309,5 +314,51 @@ impl OperationalStore {
             });
         }
         Ok(())
+    }
+
+    /// Applies forward-only `0002_cyber_shift.sql` strictly AFTER a verified online `Zstd-9` backup (`INV-12`, `GATE-02`).
+    pub fn apply_migration_0002_with_backup(
+        &self,
+        backup_path: impl AsRef<Path>,
+    ) -> Result<BackupReceipt, StoreError> {
+        let already: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT version FROM _fcast_migrations WHERE version = 2",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let receipt = self.create_verified_zstd_backup(backup_path)?;
+        if already.is_none() {
+            self.conn.execute_batch(MIGRATION_0002_SQL)?;
+            let sha = format!("{:x}", Sha256::digest(MIGRATION_0002_SQL.as_bytes()));
+            self.conn.execute(
+                "INSERT INTO _fcast_migrations (version, name, sha256_hex, applied_utc)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![2_i64, "0002_cyber_shift", sha, "2026-11-25T00:00:00Z"],
+            )?;
+        }
+        Ok(receipt)
+    }
+
+    /// Lossless `V1 -> V2` read upcaster (`§18`): reads immutable historical `V1` revision payload
+    /// alongside its upcasted `cyber_prior_shift_nats` (`0.0` default) without mutating `forecast_revisions`.
+    pub fn read_revision_upcast_v2(
+        &self,
+        revision_id: &str,
+    ) -> Result<Option<(i64, f64, f64)>, StoreError> {
+        let row: Option<(i64, f64, Option<f64>)> = self
+            .conn
+            .query_row(
+                "SELECT r.payload_schema_ver, r.p_indep, s.cyber_prior_shift_nats
+                 FROM forecast_revisions r
+                 JOIN forecast_streams s ON s.forecast_id = r.forecast_id
+                 WHERE r.revision_id = ?1",
+                params![revision_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        Ok(row.map(|(ver, p_indep, shift)| (ver, p_indep, shift.unwrap_or(0.0))))
     }
 }

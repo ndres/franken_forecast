@@ -21,10 +21,12 @@ fn gate_24_zero_key_quickstart_and_verify_receipts() {
     let init_json: serde_json::Value =
         serde_json::from_slice(&init_out.stdout).expect("valid init json");
     assert_eq!(init_json["status"], "ok");
-    assert!(init_json["zero_key_seed_revision_id"]
-        .as_str()
-        .unwrap_or_default()
-        .starts_with("rev_"));
+    assert!(
+        init_json["zero_key_seed_revision_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("rev_")
+    );
 
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

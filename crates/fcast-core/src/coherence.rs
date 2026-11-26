@@ -83,7 +83,11 @@ pub fn build_metaculus_cdf(
 
     cdf[0] = if open_lower { cdf[0].max(0.001) } else { 0.0 };
     let last_idx = n - 1;
-    cdf[last_idx] = if open_upper { cdf[last_idx].min(0.999) } else { 1.0 };
+    cdf[last_idx] = if open_upper {
+        cdf[last_idx].min(0.999)
+    } else {
+        1.0
+    };
 
     for i in 1..n {
         cdf[i] = cdf[i].max(cdf[i - 1] + min_step);
@@ -91,7 +95,11 @@ pub fn build_metaculus_cdf(
     }
 
     let span_cur = cdf[last_idx] - cdf[0];
-    let target_hi = if open_upper { cdf[last_idx].min(0.999) } else { 1.0 };
+    let target_hi = if open_upper {
+        cdf[last_idx].min(0.999)
+    } else {
+        1.0
+    };
     let span_tgt = target_hi - cdf[0];
     if span_cur > 0.0 && (cdf[last_idx] - target_hi).abs() > 1e-12 {
         let c0 = cdf[0];
@@ -138,7 +146,8 @@ pub fn pav_isotonic_nondecreasing(vals: &[f64]) -> Vec<f64> {
     while i + 1 < blocks.len() {
         if blocks[i].0 > blocks[i + 1].0 {
             let w = blocks[i].1 + blocks[i + 1].1;
-            let mean = (blocks[i].0 * blocks[i].1 as f64 + blocks[i + 1].0 * blocks[i + 1].1 as f64)
+            let mean = (blocks[i].0 * blocks[i].1 as f64
+                + blocks[i + 1].0 * blocks[i + 1].1 as f64)
                 / (w as f64);
             blocks[i] = (mean, w);
             blocks.remove(i + 1);
@@ -185,17 +194,34 @@ mod tests {
     fn metaculus_cdf_linear_log_and_discrete() {
         let lin = build_metaculus_cdf(
             &[(20.0, 0.10), (50.0, 0.50), (80.0, 0.90)],
-            0.0, 100.0, false, false, None, None, 5e-5, 0.59,
+            0.0,
+            100.0,
+            false,
+            false,
+            None,
+            None,
+            5e-5,
+            0.59,
         )
         .expect("lin");
         assert_eq!(lin.len(), 201);
         assert_eq!(lin[0], 0.0);
         assert_eq!(lin[200], 1.0);
-        assert!(lin.windows(2).all(|w| w[1] - w[0] >= 5e-5 - 1e-12 && w[1] - w[0] <= 0.59 + 1e-12));
+        assert!(
+            lin.windows(2)
+                .all(|w| w[1] - w[0] >= 5e-5 - 1e-12 && w[1] - w[0] <= 0.59 + 1e-12)
+        );
 
         let disc = build_metaculus_cdf(
             &[(3.0, 0.20), (8.0, 0.60), (12.0, 0.90)],
-            0.0, 15.0, false, true, None, Some(15), 5e-5, 0.59,
+            0.0,
+            15.0,
+            false,
+            true,
+            None,
+            Some(15),
+            5e-5,
+            0.59,
         )
         .expect("disc");
         assert_eq!(disc.len(), 16);

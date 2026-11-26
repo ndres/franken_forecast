@@ -34,7 +34,7 @@ fcast-bench = { path = "crates/fcast-bench" }
 
 # Upstream Franken Suite crates (Edition 2024, nightly-2026-08-31)
 # M1/M3 crates (asupersync, fnp-ndarray) are added as their milestones open so M0 stays zero-warning.
-fsqlite = { git = "https://github.com/Dicklesworthstone/frankensqlite", package = "fsqlite" }
+fsqlite = { git = "https://github.com/Dicklesworthstone/frankensqlite", rev = "80083505c29b636217aeb9df0f92bda1467a3a7e", package = "fsqlite" }
 
 # Pure-Rust foundational crates (0 banned runtimes, 0 C/C++ FFI)
 blake3 = "1.8"

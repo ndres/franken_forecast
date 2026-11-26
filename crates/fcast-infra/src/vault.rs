@@ -115,11 +115,17 @@ mod tests {
         let small = b"CERT-EU advisory span";
         let a1 = vault.put_bytes("span1", small).expect("put small");
         assert!(!a1.zstd_compressed);
-        assert_eq!(vault.read_verified(&a1.sha256_hex, false).expect("read"), small);
+        assert_eq!(
+            vault.read_verified(&a1.sha256_hex, false).expect("read"),
+            small
+        );
 
         let big = vec![b'A'; ZSTD_SPILL_THRESHOLD_BYTES + 4096];
         let a2 = vault.put_bytes("pdf_tbl", &big).expect("put big");
         assert!(a2.zstd_compressed);
-        assert_eq!(vault.read_verified(&a2.sha256_hex, true).expect("read"), big);
+        assert_eq!(
+            vault.read_verified(&a2.sha256_hex, true).expect("read"),
+            big
+        );
     }
 }

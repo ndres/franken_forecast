@@ -11,13 +11,15 @@
 
 | Gate ID | Primary Claim | Subsystem | Tier | Receipt Artifact | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `GATE-01`, `GATE-02` | `CLAIM-01` | `SUB-01` | `Tier 2` | `receipts/M0-BUNDLE.json` | `CRATE_VERIFIED` |
-| `GATE-04`, `GATE-05` | `CLAIM-02` | `SUB-01` | `Tier 2` | `receipts/M0-BUNDLE.json` | `CRATE_VERIFIED` |
-| `GATE-09` | `CLAIM-03` | `SUB-03` | `Tier 2` | `receipts/M0-BUNDLE.json` | `CRATE_VERIFIED` |
-| `GATE-24` | `CLAIM-08` | `SUB-08` | `Tier 2` | `receipts/M0-BUNDLE.json` | `CRATE_VERIFIED` |
+| `GATE-01`, `GATE-02` | `CLAIM-01` | `SUB-01` | `Tier 2` | `receipts/GATE-01.json`, `receipts/GATE-02.json` | `CRATE_VERIFIED` |
+| `GATE-04`, `GATE-05` | `CLAIM-02` | `SUB-01` | `Tier 2` | `receipts/GATE-04.json`, `receipts/GATE-05.json` | `CRATE_VERIFIED` |
+| `GATE-09` | `CLAIM-03` | `SUB-03` | `Tier 2` | `receipts/GATE-09.json` | `CRATE_VERIFIED` |
+| `GATE-24` | `CLAIM-08` | `SUB-08` | `Tier 2` | `receipts/GATE-24.json` | `CRATE_VERIFIED` |
 | `GATE-03`, `GATE-06..08`, `GATE-10..23` | `CLAIM-01..08` | `SUB-01..08` | `Tier 0/1` | *Pending `M1..M5` execution* | `UNIMPLEMENTED` |
 
 ## Chronological Delivery Entries
+
+* **2026-11-25 — `M0.5` Hardening Pass (CI, `justfile`, `ablation.toml`, `fcast-infra::jobs`, `0002` Upcast, `<= 1e-9` Golden Parity & Per-Gate Receipts):** Added `.github/workflows/ci.yml`, `justfile`, `config/ablation.toml`, pinned `frankensqlite` to exact `rev = "80083505c29b636217aeb9df0f92bda1467a3a7e"`, implemented `fcast-infra::jobs` (`DurableJobStore` + coalesced `domain_events` outbox) and `0002_cyber_shift.sql` + lossless `V1 -> V2` upcaster, exported `tests/golden/math_vectors.json` verified to `<= 1e-9` in `fcast-core/tests/golden_parity.rs` (`60,000` `proptest` cases + JSON Schema + blinding checks), upgraded `GATE-01` to audit the compiled transitive `cargo tree`, and programmatically emitted per-gate receipts (`receipts/GATE-{01,02,04,05,09,24}.json`). All `22 / 22` Rust tests and `4 / 4` Python verifiers pass with `0` warnings.
 
 * **2026-11-25 — `M0` Pure-Rust 6-Crate Workspace & `Tier 2` Verification (`GATE-01`, `02`, `04`, `05`, `09`, `24`):** Bootstrapped the 6-crate acyclic Rust DAG (`Cargo.toml`, `rust-toolchain.toml` pinned to upstream Franken Suite `nightly-2026-08-31`, `deny.toml`, `clippy.toml`, `schemas/v1/forecast_revision.schema.json`), implemented `fcast-core` (`ForecastRevision`, Two-Speed belief engine, `AUDIT-FLAG-05` Martingale projection, `MetaculusCdfBuilder`, PAV/Fréchet/EB coherence, `MarketBlindingScrubber`), `fcast-infra` (`0001_init.sql` WAL/MVCC + immutability triggers + transactional `domain_events` outbox over upstream `fsqlite::blocking`, `EvidenceVault` Zstd-3 spill, `SafeExternalFetch`), and `fcast-app` (`fcast init` + `fcast verify-receipts`). Verified `0` warnings under `cargo clippy --workspace --all-targets -- -D warnings` and `13 / 13` passing Rust tests (`receipts/M0-BUNDLE.json`).
 

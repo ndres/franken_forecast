@@ -1,0 +1,31 @@
+# Single-Knob Modular Ablation Configuration (§5.1, §11, §12.7)
+# Every experimental mechanism is gated by an isolated toggle so Crucible backtests
+# attribute full-universe Brier/Log deltas cleanly to one change at a time.
+
+[toggles]
+# CLAIM-05 Subordinate Hypotheses (HYP-05A .. HYP-05F)
+enable_mean_precision_stream = true       # HYP-05A: (mu_t, N_t) log-odds filter
+enable_adaptive_decay = true              # HYP-05B: DecayController(Domain x H_rem x S_t)
+enable_novelty_discounting = true         # HYP-05C: Frankensearch clipped novelty + L2 shrinkage
+enable_pbm_cas_fold = true                # HYP-05D: Handle-only Tier-1 PBM fold
+enable_martingale_voi_stopping = true     # HYP-05E: Frechet-feasible VoI_log + >=2-fold floor
+enable_king_zeng_cyber_shift = true       # HYP-05F: arXiv:2610.04798 prior shift
+
+# Competitive Bot & Refactoring v1.9/v2.0 Knobs
+enable_multivendor_median_ensemble = true # §5.1 Notebook 43497 median/Huberized pooling
+enable_disagreement_deep_dive = true      # §5.1 Secondary fold when panel spread >= 0.15
+enable_gated_red_team_audit = true        # §11.2 red_team_audit.tmpl on |dlogit|>=0.35 / tails / freeze
+enable_kalman_market_blend = true         # §11.3 1D Latent-Logit Kalman + Bayesian Surprise
+enable_ridge_platt_extremize = false      # §12.7 OFF until n >= 100 resolved forecasts per domain
+enable_defensive_tail_clipping = true     # §5.1 Tournament tail guardrails
+
+[parameters]
+tail_clip_min = 0.02
+tail_clip_max = 0.98
+red_team_logit_threshold = 0.35
+disagreement_spread_threshold = 0.15
+kalman_surprise_wake_nats = 0.15
+platt_min_resolved_n = 100
+extremize_d_max = 1.35
+daily_background_budget_usd = 5.00
+forecastbench_round_budget_usd = 15.00

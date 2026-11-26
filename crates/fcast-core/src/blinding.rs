@@ -112,7 +112,8 @@ mod tests {
         assert!(VerifiedEvidenceRef::parse("http://raw.url").is_err());
         assert!(MarketBlindingScrubber::assert_blind_payload("evidence only").is_ok());
         assert!(MarketBlindingScrubber::assert_blind_payload("{\"p_market\": 0.42}").is_err());
-        let scrubbed = MarketBlindingScrubber::scrub_text("CERT-EU advisory\nPolymarket at 42%\nGrid alert");
+        let scrubbed =
+            MarketBlindingScrubber::scrub_text("CERT-EU advisory\nPolymarket at 42%\nGrid alert");
         assert_eq!(scrubbed, "CERT-EU advisory\nGrid alert");
     }
 }

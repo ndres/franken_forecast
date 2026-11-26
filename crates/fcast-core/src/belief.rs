@@ -297,19 +297,50 @@ mod tests {
 
     #[test]
     fn still_invariance_and_up_monotonicity() {
-        let mut b = ConjugateBelief { alpha: 0.4, beta: 9.6 };
+        let mut b = ConjugateBelief {
+            alpha: 0.4,
+            beta: 9.6,
+        };
         for _ in 0..30 {
             b = b.stream_step(
-                0.04, 10.0, DomainKind::Cyber, HorizonGeometry::PointInTime,
-                0.0, 720.0, 720.0, 0.5, Direction::Still, 0.0, 0.0, 1.0, 1.35, 0.6,
+                0.04,
+                10.0,
+                DomainKind::Cyber,
+                HorizonGeometry::PointInTime,
+                0.0,
+                720.0,
+                720.0,
+                0.5,
+                Direction::Still,
+                0.0,
+                0.0,
+                1.0,
+                1.35,
+                0.6,
             );
         }
         assert!((b.mean() - 0.04).abs() < 1e-12);
         assert!((b.n_eff() - 10.0).abs() < 1e-12);
 
-        let hi = ConjugateBelief { alpha: 8.0, beta: 2.0 }.stream_step(
-            0.50, 4.0, DomainKind::Geopolitics, HorizonGeometry::PointInTime,
-            0.0, 500.0, 1000.0, 0.5, Direction::Up, 0.25, 0.6, 1.0, 1.35, 0.6,
+        let hi = ConjugateBelief {
+            alpha: 8.0,
+            beta: 2.0,
+        }
+        .stream_step(
+            0.50,
+            4.0,
+            DomainKind::Geopolitics,
+            HorizonGeometry::PointInTime,
+            0.0,
+            500.0,
+            1000.0,
+            0.5,
+            Direction::Up,
+            0.25,
+            0.6,
+            1.0,
+            1.35,
+            0.6,
         );
         assert!(hi.mean() > 0.80);
     }

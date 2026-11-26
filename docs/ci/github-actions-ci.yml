@@ -1,0 +1,43 @@
+name: CI — FrankenForecast (fcast)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  spec-and-math-verifiers:
+    name: Spec Hygiene, Math & Lean Audit Verifiers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run all 4 spec & contract verifiers
+        run: |
+          python3 scripts/verify_plan_hygiene.py
+          python3 scripts/verify_math_and_contracts.py
+          python3 lean_experiments/verify_audit_flags.py
+          python3 docs/proposals/verify_refactoring_math.py
+
+  rust-workspace:
+    name: Rust Workspace (nightly-2026-08-31 · Clippy · Tests · Receipts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain from rust-toolchain.toml
+        uses: dtolnay/rust-toolchain@master
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy (-D warnings across all targets)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run workspace unit, proptest & integration tests
+        run: cargo test --workspace
+      - name: Verify offline gate receipts
+        run: cargo run -p fcast-app -- verify-receipts

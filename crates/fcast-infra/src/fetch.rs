@@ -17,7 +17,10 @@ pub enum SafeFetchError {
     #[error("SSRF blocked prohibited IP {0} ({1})")]
     BlockedIp(IpAddr, &'static str),
     #[error("DNS rebinding detected: pinned {pinned} != connect target {actual}")]
-    DnsRebindingDetected { pinned: SocketAddr, actual: SocketAddr },
+    DnsRebindingDetected {
+        pinned: SocketAddr,
+        actual: SocketAddr,
+    },
     #[error("response exceeded byte cap ({0} bytes)")]
     SizeCapExceeded(u64),
     #[error("XML external entity / DOCTYPE declaration rejected")]
@@ -55,7 +58,10 @@ fn validate_v4(v4: Ipv4Addr) -> Result<(), SafeFetchError> {
         return Err(SafeFetchError::BlockedIp(IpAddr::V4(v4), "RFC1918_private"));
     }
     if v4.is_link_local() {
-        return Err(SafeFetchError::BlockedIp(IpAddr::V4(v4), "IMDS_or_link_local"));
+        return Err(SafeFetchError::BlockedIp(
+            IpAddr::V4(v4),
+            "IMDS_or_link_local",
+        ));
     }
     if oct[0] == 100 && (oct[1] & 0b1100_0000) == 64 {
         return Err(SafeFetchError::BlockedIp(IpAddr::V4(v4), "CGNAT_100_64_10"));
@@ -72,7 +78,10 @@ fn validate_v6(v6: Ipv6Addr) -> Result<(), SafeFetchError> {
     }
     let seg0 = v6.segments()[0];
     if (seg0 & 0xfe00) == 0xfc00 {
-        return Err(SafeFetchError::BlockedIp(IpAddr::V6(v6), "ipv6_unique_local"));
+        return Err(SafeFetchError::BlockedIp(
+            IpAddr::V6(v6),
+            "ipv6_unique_local",
+        ));
     }
     if (seg0 & 0xffc0) == 0xfe80 {
         return Err(SafeFetchError::BlockedIp(IpAddr::V6(v6), "ipv6_link_local"));

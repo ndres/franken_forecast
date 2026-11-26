@@ -124,7 +124,9 @@ impl OutcomeDistribution {
             }
             Self::Categorical { probs, dirichlet_n } => {
                 if probs.len() < 2 || !dirichlet_n.is_finite() || *dirichlet_n < 0.0 {
-                    return Err(ForecastError::InvalidCategorical("need >= 2 outcomes and finite n_eff"));
+                    return Err(ForecastError::InvalidCategorical(
+                        "need >= 2 outcomes and finite n_eff",
+                    ));
                 }
                 if probs.iter().any(|p| !p.is_finite() || *p < 0.0 || *p > 1.0) {
                     return Err(ForecastError::InvalidCategorical("element out of [0, 1]"));
@@ -141,7 +143,9 @@ impl OutcomeDistribution {
                 }
                 for win in grid.windows(2) {
                     if !win[0].is_finite() || !win[1].is_finite() || win[1] < win[0] {
-                        return Err(ForecastError::InvalidCdf("cdf must be finite and non-decreasing"));
+                        return Err(ForecastError::InvalidCdf(
+                            "cdf must be finite and non-decreasing",
+                        ));
                     }
                 }
                 Ok(())

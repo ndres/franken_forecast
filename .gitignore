@@ -23,3 +23,7 @@ __pycache__/
 
 # Rust build artifacts
 /target/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store

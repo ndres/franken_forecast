@@ -87,9 +87,10 @@ fn gate_02_04_05_store_immutability_fence_and_horizon_projection() {
     ));
 
     // Immutability triggers MUST abort UPDATE and DELETE
-    assert!(conn
-        .execute("UPDATE forecast_revisions SET p_indep = 0.99", [])
-        .is_err());
+    assert!(
+        conn.execute("UPDATE forecast_revisions SET p_indep = 0.99", [])
+            .is_err()
+    );
     assert!(conn.execute("DELETE FROM forecast_revisions", []).is_err());
 
     // Horizon projection returns NotYetIssued before origin and StandingRevision after
