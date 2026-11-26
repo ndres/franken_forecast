@@ -12,4 +12,10 @@ workspace = true
 fcast-core.workspace = true
 fcast-infra.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true

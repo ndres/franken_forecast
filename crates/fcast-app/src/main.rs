@@ -144,7 +144,8 @@ fn run_verify_receipts(
     if let Some(dir) = write_dir {
         fs::create_dir_all(dir)?;
         for gate_id in [
-            "GATE-01", "GATE-02", "GATE-04", "GATE-05", "GATE-09", "GATE-24",
+            "GATE-01", "GATE-02", "GATE-04", "GATE-05", "GATE-08", "GATE-09", "GATE-10", "GATE-11",
+            "GATE-12", "GATE-16", "GATE-17", "GATE-18", "GATE-19", "GATE-24",
         ] {
             let rec = GateReceipt {
                 gate_id: gate_id.into(),
@@ -161,7 +162,7 @@ fn run_verify_receipts(
     }
 
     Ok(GateReceipt {
-        gate_id: "M0-BUNDLE".into(),
+        gate_id: "M1-BUNDLE".into(),
         status: "VERIFIED",
         tier: "Tier 2 (Crate-Verified)",
         workspace_sha256,

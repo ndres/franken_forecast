@@ -51,6 +51,13 @@ pub struct DomainEventRecord {
     pub payload_json: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsumerCursor {
+    pub consumer_id: String,
+    pub last_acked_event_seq: i64,
+    pub updated_utc: String,
+}
+
 #[derive(Debug)]
 pub struct DurableJobStore<'a> {
     store: &'a OperationalStore,
@@ -174,11 +181,12 @@ impl<'a> DurableJobStore<'a> {
         } else {
             "QUEUED"
         };
+        let sanitized_err = crate::daemon::scrub_secrets(err_msg);
         self.store.connection().execute(
             "UPDATE fcast_jobs
              SET attempts = ?1, state = ?2, lease_expires_epoch = NULL, last_error = ?3
              WHERE job_id = ?4",
-            params![next_attempts, next_state, err_msg, job_id],
+            params![next_attempts, next_state, &sanitized_err, job_id],
         )?;
         Ok(next_state.to_owned())
     }
@@ -231,5 +239,105 @@ impl<'a> DurableJobStore<'a> {
             });
         }
         Ok(out)
+    }
+
+    /// Registers a durable subsystem consumer in `event_consumers` (`§13.2`, `Plan v2.1`).
+    ///
+    /// Idempotent across restarts: existing consumers preserve their `last_acked_event_seq`.
+    /// Returns `true` if newly inserted.
+    pub fn register_consumer(
+        &self,
+        consumer_id: &str,
+        updated_utc: &str,
+    ) -> Result<bool, StoreError> {
+        let changed = self.store.connection().execute(
+            "INSERT OR IGNORE INTO event_consumers (consumer_id, last_acked_event_seq, updated_utc)
+             VALUES (?1, 0, ?2)",
+            params![consumer_id, updated_utc],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Reads the persisted cursor for `consumer_id`, if registered.
+    pub fn consumer_cursor(&self, consumer_id: &str) -> Result<Option<ConsumerCursor>, StoreError> {
+        let row: Option<(String, i64, String)> = self
+            .store
+            .connection()
+            .query_row(
+                "SELECT consumer_id, last_acked_event_seq, updated_utc
+                 FROM event_consumers
+                 WHERE consumer_id = ?1",
+                params![consumer_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        Ok(row.map(
+            |(consumer_id, last_acked_event_seq, updated_utc)| ConsumerCursor {
+                consumer_id,
+                last_acked_event_seq,
+                updated_utc,
+            },
+        ))
+    }
+
+    /// Replays all unacknowledged `domain_events` strictly after the consumer's persisted
+    /// `last_acked_event_seq` in deterministic `event_seq ASC` order (`§13.2`).
+    pub fn replay_unacked_events(
+        &self,
+        consumer_id: &str,
+    ) -> Result<Vec<DomainEventRecord>, StoreError> {
+        let last_acked: i64 = self
+            .store
+            .connection()
+            .query_row(
+                "SELECT last_acked_event_seq FROM event_consumers WHERE consumer_id = ?1",
+                params![consumer_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        self.poll_domain_events(last_acked)
+    }
+
+    /// Monotonically advances `event_consumers.last_acked_event_seq` for `consumer_id`
+    /// and returns the effective persisted cursor sequence (`§13.2`).
+    pub fn ack_consumer_cursor(
+        &self,
+        consumer_id: &str,
+        event_seq: i64,
+        updated_utc: &str,
+    ) -> Result<i64, StoreError> {
+        let existing: Option<i64> = self
+            .store
+            .connection()
+            .query_row(
+                "SELECT last_acked_event_seq FROM event_consumers WHERE consumer_id = ?1",
+                params![consumer_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match existing {
+            None => {
+                let effective = event_seq.max(0);
+                self.store.connection().execute(
+                    "INSERT INTO event_consumers (consumer_id, last_acked_event_seq, updated_utc)
+                     VALUES (?1, ?2, ?3)",
+                    params![consumer_id, effective, updated_utc],
+                )?;
+                Ok(effective)
+            }
+            Some(current) => {
+                let effective = current.max(event_seq);
+                if effective > current {
+                    self.store.connection().execute(
+                        "UPDATE event_consumers
+                         SET last_acked_event_seq = ?1, updated_utc = ?2
+                         WHERE consumer_id = ?3",
+                        params![effective, updated_utc, consumer_id],
+                    )?;
+                }
+                Ok(effective)
+            }
+        }
     }
 }

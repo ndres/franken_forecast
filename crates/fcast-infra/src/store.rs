@@ -11,6 +11,7 @@ use thiserror::Error;
 
 pub const MIGRATION_0001_SQL: &str = include_str!("../migrations/0001_init.sql");
 pub const MIGRATION_0002_SQL: &str = include_str!("../migrations/0002_cyber_shift.sql");
+pub const MIGRATION_0003_SQL: &str = include_str!("../migrations/0003_event_consumers.sql");
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -100,6 +101,7 @@ impl OperationalStore {
 
     fn apply_initial_migration(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(MIGRATION_0001_SQL)?;
+        self.conn.execute_batch(MIGRATION_0003_SQL)?;
         let sha = format!("{:x}", Sha256::digest(MIGRATION_0001_SQL.as_bytes()));
         self.conn.execute(
             "INSERT OR IGNORE INTO _fcast_migrations (version, name, sha256_hex, applied_utc)
@@ -340,6 +342,29 @@ impl OperationalStore {
             )?;
         }
         Ok(receipt)
+    }
+
+    /// Applies forward-only `0003_event_consumers.sql` idempotently and records version `3`
+    /// in `_fcast_migrations` (`§13.2`, `Plan v2.1`).
+    pub fn apply_migration_0003(&self) -> Result<(), StoreError> {
+        let already: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT version FROM _fcast_migrations WHERE version = 3",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        self.conn.execute_batch(MIGRATION_0003_SQL)?;
+        if already.is_none() {
+            let sha = format!("{:x}", Sha256::digest(MIGRATION_0003_SQL.as_bytes()));
+            self.conn.execute(
+                "INSERT INTO _fcast_migrations (version, name, sha256_hex, applied_utc)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![3_i64, "0003_event_consumers", sha, "2026-11-26T00:00:00Z"],
+            )?;
+        }
+        Ok(())
     }
 
     /// Lossless `V1 -> V2` read upcaster (`§18`): reads immutable historical `V1` revision payload
