@@ -1,5 +1,5 @@
-[net]
-git-fetch-with-cli = true
-
+# Enforce HEAD-only shallow git fetching for all upstream Franken Suite git dependencies
+# (frankensqlite, asupersync, franken_numpy, etc.) via Cargo nightly gitoxide support.
 [unstable]
-git = { shallow-deps = true }
+git = { shallow-deps = true, shallow-index = true }
+gitoxide = { fetch = true, checkout = true }
