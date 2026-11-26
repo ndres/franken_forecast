@@ -3,6 +3,7 @@
 pub mod daemon;
 pub mod fetch;
 pub mod jobs;
+pub mod llm;
 pub mod store;
 pub mod sys;
 pub mod vault;

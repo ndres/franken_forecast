@@ -4,6 +4,7 @@ use fcast_core::blinding::VerifiedEvidenceRef;
 use fcast_core::forecast::{
     OutcomeDistribution, ProbClamped, ResolutionStatusAtCutoff, UnsealedForecastRevision,
 };
+use fcast_infra::llm::{GEMINI_4_HYDROGEN, GeminiCliClient, GeminiGenerateRequest};
 use fcast_infra::store::{HorizonProjection, OperationalStore};
 use fcast_infra::sys::DataRootLayout;
 use fcast_infra::vault::EvidenceVault;
@@ -170,6 +171,70 @@ fn run_verify_receipts(
     })
 }
 
+fn run_gemini_cli(args: &[String]) -> Result<String, Box<dyn std::error::Error>> {
+    let client = GeminiCliClient::from_env();
+    let sub = args.first().map(String::as_str).unwrap_or("help");
+    match sub {
+        "whoami" => {
+            let info = client.whoami()?;
+            Ok(serde_json::to_string_pretty(&info)?)
+        }
+        "models" => {
+            let models = client.models_list()?;
+            Ok(serde_json::to_string_pretty(&models)?)
+        }
+        "generate" => {
+            let prompt = args
+                .get(1)
+                .filter(|s| !s.starts_with("--"))
+                .ok_or("missing prompt: fcast gemini generate <prompt> [--model <m>] [--dry-run]")?;
+            let mut req = GeminiGenerateRequest::new(GEMINI_4_HYDROGEN, prompt.clone());
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--model" | "-m" => {
+                        if let Some(m) = args.get(i + 1) {
+                            req.model = m.clone();
+                            i += 2;
+                        } else {
+                            return Err("missing value for --model".into());
+                        }
+                    }
+                    "--system" => {
+                        if let Some(s) = args.get(i + 1) {
+                            req.system_instruction = Some(s.clone());
+                            i += 2;
+                        } else {
+                            return Err("missing value for --system".into());
+                        }
+                    }
+                    "--previous-interaction-id" => {
+                        if let Some(prev) = args.get(i + 1) {
+                            req.previous_interaction_id = Some(prev.clone());
+                            i += 2;
+                        } else {
+                            return Err("missing value for --previous-interaction-id".into());
+                        }
+                    }
+                    "--dry-run" => {
+                        req.dry_run = true;
+                        i += 1;
+                    }
+                    other => {
+                        return Err(format!("unknown flag for `fcast gemini generate`: {other}").into());
+                    }
+                }
+            }
+            let resp = client.generate(&req)?;
+            Ok(serde_json::to_string_pretty(&resp)?)
+        }
+        _ => Ok(
+            "Usage:\n  fcast gemini whoami\n  fcast gemini models\n  fcast gemini generate <prompt> [--model <m>] [--system <s>] [--previous-interaction-id <id>] [--dry-run]\n"
+                .to_owned(),
+        ),
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let cmd = args.get(1).map(String::as_str).unwrap_or("help");
@@ -192,8 +257,9 @@ fn main() -> ExitCode {
             run_verify_receipts(&cwd, write_dir.as_deref())
                 .and_then(|r| Ok(serde_json::to_string_pretty(&r)?))
         }
+        "gemini" => run_gemini_cli(&args[2..]),
         _ => Ok(
-            "FrankenForecast (fcast) M0 CLI\nUsage:\n  fcast init [--data-root <dir>]\n  fcast verify-receipts [--write-dir <dir>]\n"
+            "FrankenForecast (fcast) CLI\nUsage:\n  fcast init [--data-root <dir>]\n  fcast verify-receipts [--write-dir <dir>]\n  fcast gemini whoami\n  fcast gemini models\n  fcast gemini generate <prompt> [--model <m>] [--system <s>] [--previous-interaction-id <id>] [--dry-run]\n"
                 .to_owned(),
         ),
     };
