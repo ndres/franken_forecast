@@ -8,7 +8,8 @@
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **[01. `No-Stream/nostreambot-metaculus-bot`](#competitor-01--no-streamnostreambot-metaculus-bot)** | `gemini-4-hydrogen-research` (`317k` LOC, `389` test files) | **15th / 277** Summer 2026 FutureEval (`~3,240` spot peer pts / `256` Qs, above all-bots ensemble) | FutureEval, MiniBench, Metaculus Cup, **Mantic Crucible** | Python 3.12 (`forecasting-tools`), GitHub Actions + `cron-job.org` | Battle-tested Mantic support, close-aware time budgeting, 4-rung fidelity-checked extraction ladder, shared-brief verification gap-fill, 389 offline tests w/ socket egress guard | Single-shot (zero longitudinal updating), `~\$2.60/Q` flat spend (no ForecastBench), no pre-seal market blinding, no bi-temporal vintage discipline, heavy Python framework monkeypatching |
 | **[02. `Schokolade12138/metac-bot-template`](#competitor-02--schokolade12138metac-bot-template-sakuraqkl)** | `main` (`+1,450` LOC over `metac-bot-template`, `3` test files) | Fall 2026 FutureEval entrant (`sakuraqkl`, lightweight fork) | FutureEval + MiniBench (`bot-testing-area` smoke test) | Python (`forecasting-tools`, OpenRouter `paid`/`free` profiles), GitHub Actions | Zero-key free research (Google News RSS + Polymarket/Manifold public search), iterative fixed-point MC simplex flooring, 2-tier credit auto-downgrade (`< \$8` cheap, `< \$0.50` stop), cross-vendor failover retry, type-stratified smoke test | Silent exit-0 crash swallowing, zero numeric/date/Mantic guards, blind `[:40_000]` research truncation, no market blinding, no resolution-source fetch or gap-fill, no longitudinal updating |
-| *(Reserved: Competitor 03)* | *Pending next analysis* | — | — | — | — | — |
+| **[03. `Poke1997/metac-firefly26710`](#competitor-03--poke1997metac-firefly26710)** | `main` @ `4e675a5` (`4,322` LOC, `0` test files) | Fall 2026 FutureEval + Metaculus Cup entrant | FutureEval, Metaculus Cup, `test_bot` | Python (`forecasting-tools`, Anthropic-only + `bot-data` git branch + Claude `review-bot` skill) | **Control/Control/Challenger** bounded-risk live A/B slots, auto-expiring **shadow forecasts** (`SHADOWS_UNTIL`), shared-context prompt-cache splitting, 4-tier billing-cycle budget pacing (`70%/90%/100%`), daily `model_watch`, cheapest-first read-only `review-bot` skill | Single-vendor (Anthropic-only) monoculture, `0` automated tests, GitHub Actions cache budget ledger (eviction resets spend), no numeric/Mantic/ForecastBench guards, no longitudinal updating or market blinding |
+| *(Reserved: Competitor 04)* | *Pending next analysis* | — | — | — | — | — |
 
 ---
 
@@ -153,3 +154,37 @@ Instead, **fold six high-ROI upgrades incrementally into `Plan v2.1` and `M1`** 
 2. **Zero Numeric/Date Safeguards & Blind Research Truncation:** Clamps binary `[0.02, 0.98]` and floors MC `>= 0.01`, but applies **no guards** on numeric/date distributions (no PCHIP, no discrete snap, no Mantic tail floor, no extraction fidelity ladder), and truncates combined research via a blind `[:40_000]` character slice that can chop mid-market or mid-sentence.
 3. **No Market Blinding, No Resolution-Source Fetching, No Gap-Fill, No Fail-Shut Re-Spend Guard:** Injects Polymarket/Manifold prices straight into the prompt pre-seal, relies only on headlines + one web-search summary, and filters `not q.already_forecasted` without failing shut if `my_forecasts` is missing.
 4. **Single-Shot Only & Minimal Test Coverage:** `3` small `unittest` files (`282` LOC), no network-egress guard, no longitudinal revision tracking, and no calibration/residual postmortem tooling.
+
+---
+
+## Competitor 03 · `Poke1997/metac-firefly26710`
+
+* **Repository & Commit:** `https://github.com/Poke1997/metac-firefly26710/commit/4e675a5ce88e77e40ccdac8037e7a9c310663210` (`4,322` total LOC, `+821` lines in commit `4e675a5`)
+* **Competitions Targeted:** **Metaculus FutureEval** and **Metaculus Cup** (`housekeeping.yaml` + `review_bot.yaml` automation). Does **not** target Mantic Crucible, MiniBench explicitly, or ForecastBench.
+
+### 1. High-Leverage Ideas Unique to `Poke1997` (Not in Competitors 01 or 02)
+
+1. **Bounded-Risk Live A/B Testing via `Control / Control / Challenger` Median Slots (`experiment.py`):**
+   * Submits the median of `[control_1, control_2, challenger]`. Because the median of three *always* lies between `control_1` and `control_2` (or on one of them), **a flawed challenger prompt can never drag the submitted tournament forecast outside the controls' range**, while simultaneously measuring live prospective A/B skill *and* pure same-prompt sampling variance (`|control_1 - control_2|`).
+   * *Adoption in `fcast`:* Add an optional `challenger_slot` mode in `Loom`'s ensemble runner (`config/ablation.toml`) so new prompt variants or `GEPA` candidates can accrue real prospective evidence safely inside live tournaments.
+2. **Auto-Expiring Shadow Forecasts (`SHADOW_FORECASTS` + `SHADOWS_UNTIL`):**
+   * Runs cheaper/faster models (`economy:2, helper:1, forecaster_medium:1`) on the exact same cached research bundle, logs their predictions without submitting them, and **auto-terminates on `SHADOWS_UNTIL`** so experimental spend never runs indefinitely.
+   * *Adoption in `fcast`:* Maps cleanly to `forecast_streams.stream_kind = 'shadow_experiment'` in `Chronicle` with a mandatory `expires_utc` cutoff.
+3. **Explicit Prompt-Cache Prefix Splitting (`split_prompt`):**
+   * Splits every forecast prompt into `(shared_context [question + criteria + research], slot_instructions)` so all submitted and shadow slots share a byte-identical cached prefix—slashing input token costs across multi-slot ensembles.
+   * *Adoption in `fcast`:* Enforce a strict cache-stable `(system + Gold Dossier + State Doc + EvidenceVault brief)` prefix across all ensemble members and `red_team_audit.tmpl` calls in `LlmRouter` (`§15`).
+4. **4-Tier Billing-Cycle Pacing Budget (`budget.py`):**
+   * Tracks spend against a monthly credit renewal day (`BUDGET_CYCLE_DAY`) plus a `BUDGET_PER_RUN_USD` cap, stepping smoothly across `full` (`< 70%`) → `economy` (`70–90%`) → `minimal` (`90–100%`, 1 forecast) → `stop` (`>= 100%`).
+   * *Adoption in `fcast`:* Extend `daemon_budget_ledger` (`§13`) with cycle-day renewal and `70%`/`90%` graceful tier step-downs alongside the daily hard cap.
+5. **Report-Only Daily Model Watcher (`model_watch.py`) & Leaderboard Snapshots (`track_record.py`):**
+   * Queries vendor `/v1/models` daily to report newly released models (`released_after_forecaster`) and alert if a configured model is deprecated/missing—never auto-switching without a test pass.
+   * *Adoption in `fcast`:* Add `fcast doctor --check-models` across Gemini/Anthropic/OpenAI/OpenRouter.
+6. **Cheapest-First Read-Only Postmortem Skill (`.claude/skills/review-bot/SKILL.md`):**
+   * Enforces strict read-only triage (`mechanical trace flags → grep research for deciding fact → 1–2 rationales → full research last`), explicitly guards against hindsight bias (*"Well forecast, unlucky outcome is a real finding"*), and requires every proposed fix to cite the exact resolved questions it would have improved.
+   * *Adoption in `fcast`:* Directly informs our `Tether` compiled postmortem skill (`§14`) and `postmortem_ee_distill.tmpl` workflow.
+
+### 2. Where `Poke1997` Falls Short
+
+1. **Single-Vendor Monoculture (Anthropic-Only):** All slots (`FORECASTER`, `ECONOMY`, `HELPER`) are Claude models—zero cross-vendor diversity against correlated lab blind spots.
+2. **Zero Automated Tests (`0` test files):** No `pytest`/`unittest` suite, no extraction ladder, no numeric/date/Mantic guards, and a live bug in `track_record.py:61` (`open(..., "w")` overwrites the history CSV instead of appending).
+3. **Fragile Cache-Backed Budget State & Single-Shot Pipeline:** Storing `.budget/ledger.json` in GitHub Actions cache risks silent spend resets on cache eviction (`fcast`'s `fsqlite` WAL `daemon_budget_ledger` is durable), and there is no longitudinal `ForecastRevision` updating, no pre-seal market blinding, and no bi-temporal vintage discipline.
