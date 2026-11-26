@@ -340,4 +340,48 @@ impl<'a> DurableJobStore<'a> {
             }
         }
     }
+
+    /// Axiomatic Split 4 (`FR7 -> FR2 t+1`): evaluates `KalmanBlendResult::mean_shift_surprise_nats`
+    /// (strictly zero on deep-book agreement!) and, when `>= wake_threshold_nats`, publishes a
+    /// coalesced `MarketTickShock` into `domain_events` + enqueues a next-timestep `t+1`
+    /// `LiveShock` job without mutating the current timestep's blind `p_indep`.
+    pub fn schedule_next_step_market_shock(
+        &self,
+        question_id: &str,
+        as_of_utc: &str,
+        deadline_utc: &str,
+        blend: &fcast_core::belief::KalmanBlendResult,
+        wake_threshold_nats: f64,
+    ) -> Result<bool, StoreError> {
+        if blend.mean_shift_surprise_nats < wake_threshold_nats {
+            return Ok(false);
+        }
+        let minute_bucket = as_of_utc.get(0..16).unwrap_or(as_of_utc);
+        let idem = format!("shock:{question_id}:{minute_bucket}");
+        let payload = serde_json::json!({
+            "mean_shift_surprise_nats": blend.mean_shift_surprise_nats,
+            "p_post": blend.p_post.get(),
+        })
+        .to_string();
+        let inserted = self.publish_domain_event(
+            "MarketTickShock",
+            question_id,
+            None,
+            as_of_utc,
+            &idem,
+            &payload,
+        )?;
+        if inserted {
+            let _ = self.enqueue_idempotent(&JobSpec {
+                kind: "belief_fold".into(),
+                lane: "epistemic_heavy".into(),
+                priority: JobPriority::LiveShock,
+                deadline_utc: deadline_utc.to_owned(),
+                voi_log: blend.mean_shift_surprise_nats,
+                idempotency_seed: format!("job:{idem}"),
+                est_cost_usd: 0.12,
+            })?;
+        }
+        Ok(inserted)
+    }
 }

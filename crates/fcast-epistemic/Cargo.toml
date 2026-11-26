@@ -9,6 +9,7 @@ description = "SUB-03 Notary & SUB-04 Loom epistemic reasoning, bi-temporal veri
 workspace = true
 
 [dependencies]
+blake3.workspace = true
 fcast-core.workspace = true
 fcast-infra.workspace = true
 fcast-ingest.workspace = true

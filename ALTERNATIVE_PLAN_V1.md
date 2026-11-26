@@ -1,8 +1,8 @@
 # FRANKENFORECAST (`fcast`): REPRESENTATION-ROUTED FORECASTING ARCHITECTURE
 
 * **Document:** `ALTERNATIVE_PLAN_V1.md` (Alternate Master Architecture — Central Representation Router & ReSHAPE Edition)
-* **Version:** `1.1 (ReSHAPE Edition)` (`2026-11-26`)
-* **Repository:** `franken_forecast` (Companion to `COMPREHENSIVE_PLAN_FOR_FRANKEN_FORECAST.md` `v2.1`; incorporates **ReSHAPE**, `arXiv:2611.16466`, Zhang et al., 2026)
+* **Version:** `1.2 (ReSHAPE + Strictly Lower-Triangular Axiomatic Edition)` (`2026-11-26`)
+* **Repository:** `franken_forecast` (Companion to `COMPREHENSIVE_PLAN_FOR_FRANKEN_FORECAST.md` `v2.1`; incorporates **ReSHAPE**, `arXiv:2611.16466`, Zhang et al., 2026, and MIT Axiomatic Design lower-triangular decoupling)
 * **Workspace Baseline:** `M0` + `M0.5` + `M1` + `gemini-api-cli` (`Tier 2: Crate-Verified` for `14 / 24` gates, `57` Rust tests, `0` Clippy warnings, `#![forbid(unsafe_code)]`)
 
 ---
@@ -159,6 +159,17 @@ Built directly atop the substrate and orchestrated by the Rep Router are four ti
 2. **Verification, Extraction & Rationale Auditing (`Notary`):** Locks all `9` prompt templates by SHA-256 with compile/load-time blinding verification (`INV-04`, `INV-05`). Audits bi-temporal `(event_utc, published_utc, available_utc)` timelines with union-strictness `first_public` selection and `[HH:MM:00Z, HH:MM:59.999Z]` lead/lag joins. Parses every LLM output through the 4-rung `ValueExtractionLadder` (rejecting duplicate JSON keys, booleans, truncated literals, and incomplete option multisets) with `THIN_PUBLISH_FLOOR` (`[0.05, 0.95]`). Scores rationales via mechanical 2-turn staged-reveal `6D+2G` (`TurnARequest` omitting prices, zero-LLM-arithmetic ranking, deterministic tie-breaks).
 3. **Two-Speed Belief, Causal Coherence & Calibration (`Loom`):** Runs the Tier-0 `(μ_t, N_t)` conjugate filter (`"Still"` invariance, endogenous `DecayController`, EvolveCast $\kappa_{\text{LR}}$) and escalates to Tier-1 CAS-handle PBM `fold` governed by Fréchet-feasible Martingale `VoI_log` (`>= 2` productive folds floor), binding `red_team_audit.tmpl` + `load_bearing_claims` `VERIFY`, and `fnx-*` 1-hop causal spillover wakeups. Enforces cross-question coherence (PAV temporal monotonicity, Fréchet `Combo` bounds, fixed-point `>= 0.01` MC simplex flooring, `13`-percentile multimodal probability-space pooling), applies King-Zeng prior-shifted `arXiv:2610.04798` cyber calibration, blends post-seal `p_market` via 1D Latent-Logit Kalman filtering, and records an exact 5-component logit attribution waterfall (`< 1e-12` residual).
 4. **Full-Universe Evaluation & Tuning Cache Closure (`Crucible`):** Tracks `100%` of eligible questions across `issued`, `excluded`, `abandoned`, and `queued_missed` dispositions, computing all `10` mandatory metrics on both investigated-only and full-universe imputed denominators. Runs two-way fixed-effects difficulty-adjusted Brier scoring, enforces the `n >= 100` + multi-era sign-stability gate on Ridge-Platt extremizing, executes air-gapped `dspy.GEPA` optimization, and feeds realized cost and proper-score residuals directly back into the Rep Router's Tuning Cache.
+
+#### Strictly Lower-Triangular Axiomatic Design Matrix (`v1.2` Decoupled Splits)
+
+To satisfy MIT Axiomatic Design Axiom 1 (Independence Axiom) with zero upper-triangular feedback cycles, the architecture enforces four compile-time and schema-level boundary splits:
+
+| Split | Boundary Enforced | Crate / Schema Implementation | Eliminated Cycle |
+| :--- | :--- | :--- | :--- |
+| **Split 1 (`FR3a` vs `FR3b`)** | `IntakeSnapshot` (before `RepRouter`) vs `EvidenceAcquisitionPlan` → `EvidenceBundle` (after `RepRouter`) | `fcast-ingest::pipeline` | `Harvester ↔ RepRouter` |
+| **Split 2 (`FR4` Time-Lag)** | `RepRouter(t)` reads only immutable `TuningCacheSnapshot(t-1)` + external `PlanConstraintSpec` | `0005_tuning_cache_snapshots.sql` + `fcast-epistemic::router` | `RepRouter ↔ Crucible / Cockpit` |
+| **Split 3 (`FR6a` vs `FR6b`)** | Stateless `PreLoomGuard` (before `Loom`) vs binding `PostProposalAudit` (after `Loom` draft) | `fcast-epistemic::audit_split` | `Loom ↔ Notary` |
+| **Split 4 (`FR7 → FR2 t+1`)** | `kalman_market_blend` (`mean_shift_surprise_nats`) schedules *next-step `t+1`* `MarketTickShock` only | `fcast-infra::jobs::schedule_next_step_market_shock` | `Loom(t) ↔ Kalman(t)` |
 
 ---
 

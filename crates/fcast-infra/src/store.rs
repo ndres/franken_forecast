@@ -13,6 +13,7 @@ pub const MIGRATION_0001_SQL: &str = include_str!("../migrations/0001_init.sql")
 pub const MIGRATION_0002_SQL: &str = include_str!("../migrations/0002_cyber_shift.sql");
 pub const MIGRATION_0003_SQL: &str = include_str!("../migrations/0003_event_consumers.sql");
 pub const MIGRATION_0004_SQL: &str = include_str!("../migrations/0004_immutability_and_chain.sql");
+pub const MIGRATION_0005_SQL: &str = include_str!("../migrations/0005_tuning_cache_snapshots.sql");
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -108,6 +109,7 @@ impl OperationalStore {
         self.conn.execute_batch(MIGRATION_0001_SQL)?;
         self.conn.execute_batch(MIGRATION_0003_SQL)?;
         self.conn.execute_batch(MIGRATION_0004_SQL)?;
+        self.conn.execute_batch(MIGRATION_0005_SQL)?;
         let sha = format!("{:x}", Sha256::digest(MIGRATION_0001_SQL.as_bytes()));
         self.conn.execute(
             "INSERT OR IGNORE INTO _fcast_migrations (version, name, sha256_hex, applied_utc)
@@ -459,6 +461,46 @@ impl OperationalStore {
             )
             .optional()?;
         Ok(row.map(|(ver, p_indep, shift)| (ver, p_indep, shift.unwrap_or(0.0))))
+    }
+
+    /// Persists an append-only immutable `TuningCacheSnapshot` (`0005_tuning_cache_snapshots.sql`).
+    /// `RepRouter(t)` reads only pre-committed snapshots `(t-1)`, decoupling `FR4` from live `Crucible` (`DP8`).
+    pub fn save_tuning_snapshot(
+        &self,
+        snapshot_id: &str,
+        created_utc: &str,
+        resolved_n: usize,
+        payload_json: &str,
+    ) -> Result<(), StoreError> {
+        parse_rfc3339_epoch_ms(created_utc)?;
+        self.conn.execute(
+            "INSERT INTO rep_router_tuning_snapshots (snapshot_id, created_utc, resolved_n, payload_json)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![snapshot_id, created_utc, resolved_n as i64, payload_json],
+        )?;
+        Ok(())
+    }
+
+    /// Loads the latest immutable `TuningCacheSnapshot` as `(snapshot_id, created_utc, resolved_n, payload_json)`.
+    pub fn load_latest_tuning_snapshot(
+        &self,
+    ) -> Result<Option<(String, String, usize, String)>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT snapshot_id, created_utc, resolved_n, payload_json
+             FROM rep_router_tuning_snapshots",
+        )?;
+        let rows: Vec<(String, String, i64, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut best: Option<(i64, (String, String, usize, String))> = None;
+        for (sid, created, rn, payload) in rows {
+            let ms = parse_rfc3339_epoch_ms(&created)?;
+            if best.as_ref().is_none_or(|(b_ms, _)| ms >= *b_ms) {
+                best = Some((ms, (sid, created, rn.max(0) as usize, payload)));
+            }
+        }
+        Ok(best.map(|(_, row)| row))
     }
 }
 

@@ -7,6 +7,7 @@
 pub mod domain_gate;
 pub mod metaculus;
 pub mod microstructure;
+pub mod pipeline;
 pub mod tick_archive;
 
 pub use domain_gate::{
@@ -26,6 +27,9 @@ pub use microstructure::{
     BookMarkPrice, BookState, DEFAULT_TICK_BPS, EXCESS_SPREAD_SCALE_BPS, MAX_SPREAD_BPS,
     MIN_TOB_LIQUIDITY_USD, MicrostructureError, OrderbookSnapshot, REF_TOB_LIQUIDITY_USD,
     SWEEP_IMPACT_SCALE,
+};
+pub use pipeline::{
+    EvidenceAcquisitionPlan, EvidenceBundle, IntakeSnapshot, assemble_evidence_bundle,
 };
 pub use tick_archive::{
     DEFAULT_ZSTD_LEVEL, L2TickRecord, PartitionKey, TickArchive, TickArchiveError,
