@@ -194,6 +194,15 @@ def main() -> None:
         "Dirichlet",
         "What-If",
         "Command Palette",
+        "QuestionRunContext",
+        "event_consumers",
+        "Mantic",
+        "ValueExtractionLadder",
+        "fetch_raw_data",
+        "THIN_PUBLISH_FLOOR",
+        "Control / Control / Challenger",
+        "SEASONAL_NOTE",
+        "TimeBudget",
     ):
         if req_fe not in text:
             fail(f"Missing required FutureEval / ForecastBench / FrankenSuite / v1.9 reference: {req_fe}")

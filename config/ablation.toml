@@ -16,12 +16,25 @@ enable_multivendor_median_ensemble = true # §5.1 Notebook 43497 median/Huberize
 enable_disagreement_deep_dive = true      # §5.1 Secondary fold when panel spread >= 0.15
 enable_gated_red_team_audit = true        # §11.2 red_team_audit.tmpl on |dlogit|>=0.35 / tails / freeze
 enable_kalman_market_blend = true         # §11.3 1D Latent-Logit Kalman + Bayesian Surprise
-enable_ridge_platt_extremize = false      # §12.7 OFF until n >= 100 resolved forecasts per domain
+enable_ridge_platt_extremize = false      # §12.7 OFF until n >= 100 AND multi-era sign stability
+platt_require_multi_era_stability = true  # §12.7 Require >= 2 disjoint eras with consistent sign
 enable_defensive_tail_clipping = true     # §5.1 Tournament tail guardrails
+
+# Plan v2.1 Multi-Competition & Empirical Research Knobs
+enable_mantic_per_bin_pmf = true          # §5.2 / §11.4 Mantic N<=31 per-bin PMF + >=5% open-tail floor
+enable_challenger_slot = false            # §11.2 Bounded-risk Control/Control/Challenger live A/B slot
+enable_raw_data_fetch = true              # §5.1 Fetch-only CSV/JSON/API dashboard reader (+7.0 pts/Q)
+enable_seasonal_note = true               # §5.1 3-5 yr calendar-window SEASONAL_NOTE (+5.5 pts/Q)
+skip_after_spot_scoring_time = true       # §5.2 / §13.2 Skip already spot-scored questions ($0 spend)
 
 [parameters]
 tail_clip_min = 0.02
 tail_clip_max = 0.98
+thin_publish_floor_min = 0.05
+thin_publish_floor_max = 0.95
+mc_simplex_floor = 0.01
+mantic_open_tail_floor = 0.05
+canonical_percentiles_count = 13
 red_team_logit_threshold = 0.35
 disagreement_spread_threshold = 0.15
 kalman_surprise_wake_nats = 0.15
@@ -29,3 +42,7 @@ platt_min_resolved_n = 100
 extremize_d_max = 1.35
 daily_background_budget_usd = 5.00
 forecastbench_round_budget_usd = 15.00
+time_budget_min_intake_sec = 120
+time_budget_fast_path_sec = 600
+watchdog_stall_alert_min = 45
+watchdog_stall_kill_min = 75

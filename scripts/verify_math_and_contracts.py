@@ -983,4 +983,184 @@ def verify_attribution_waterfall(p_prev, d_decay, d_stream, d_fold, d_redteam, d
 p_w = verify_attribution_waterfall(0.134, -0.04, +0.18, +0.31, -0.07, -0.11)
 assert 0.16 < p_w < 0.18
 
+# v2.1 Witness D: Durable event_consumers Cursor Replay & Idempotent Ack (§13.2)
+with tempfile.TemporaryDirectory() as tmpv21:
+    evdb = sqlite3.connect(os.path.join(tmpv21, "consumers.fsqlite"))
+    evdb.execute("PRAGMA journal_mode = WAL;")
+    evdb.executescript("""
+        CREATE TABLE domain_events (
+            event_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_kind TEXT NOT NULL,
+            question_id TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE event_consumers (
+            consumer_id TEXT PRIMARY KEY,
+            last_acked_event_seq INTEGER NOT NULL,
+            updated_utc TEXT NOT NULL
+        );
+    """)
+    for i, (kind, qid) in enumerate([
+        ("NewEligibleContract", "q1"),
+        ("MarketTickShock", "q1"),
+        ("RevisionSealed", "q1"),
+    ], start=1):
+        evdb.execute(
+            "INSERT INTO domain_events(event_kind, question_id, idempotency_key) VALUES (?,?,?)",
+            (kind, qid, f"k:{i}"),
+        )
+    evdb.execute("INSERT INTO event_consumers VALUES ('loom_belief', 0, '2026-11-26T00:00:00Z')")
+    evdb.execute("INSERT INTO event_consumers VALUES ('cockpit_push', 0, '2026-11-26T00:00:00Z')")
+    evdb.commit()
+
+    def replay_for(conn, consumer_id, limit=None):
+        last_seq = conn.execute(
+            "SELECT last_acked_event_seq FROM event_consumers WHERE consumer_id = ?",
+            (consumer_id,),
+        ).fetchone()[0]
+        q = "SELECT event_seq, event_kind FROM domain_events WHERE event_seq > ? ORDER BY event_seq ASC"
+        rows = conn.execute(q, (last_seq,)).fetchall()
+        return rows[:limit] if limit is not None else rows
+
+    # Consumer processes first 2 events, acks seq=2, then crashes before seq=3
+    batch1 = replay_for(evdb, "loom_belief", limit=2)
+    assert [r[0] for r in batch1] == [1, 2]
+    evdb.execute(
+        "UPDATE event_consumers SET last_acked_event_seq = ?, updated_utc = '2026-11-26T00:01:00Z' WHERE consumer_id = 'loom_belief'",
+        (batch1[-1][0],),
+    )
+    evdb.commit()
+    # After restart, loom_belief resumes strictly at seq=3 while cockpit_push still sees [1, 2, 3]
+    batch2 = replay_for(evdb, "loom_belief")
+    assert [r[0] for r in batch2] == [3]
+    assert [r[0] for r in replay_for(evdb, "cockpit_push")] == [1, 2, 3]
+    evdb.close()
+
+# v2.1 Witness E: Close-Derived TimeBudget, skip_after_spot_scoring_time & 4-Tier Billing Pacing (§13 & §13.2)
+def plan_time_budget(now_s, close_s, spot_s=None, min_intake_s=120, fast_path_s=600):
+    if spot_s is not None and now_s >= spot_s:
+        return "skip_after_spot_scoring_time"
+    deadline = min(close_s, spot_s) if spot_s is not None else close_s
+    rem = deadline - now_s
+    if rem < min_intake_s:
+        return "intake_skip"
+    if rem < fast_path_s:
+        return "fast_path"
+    return "full"
+
+assert plan_time_budget(1000, 2000, spot_s=950) == "skip_after_spot_scoring_time"
+assert plan_time_budget(1000, 1080) == "intake_skip"
+assert plan_time_budget(1000, 1400) == "fast_path"
+assert plan_time_budget(1000, 3000) == "full"
+
+def billing_pacing_tier(burn_frac):
+    if burn_frac >= 1.0:
+        return "stop"
+    if burn_frac >= 0.90:
+        return "minimal"
+    if burn_frac >= 0.70:
+        return "economy"
+    return "full"
+
+assert [billing_pacing_tier(x) for x in (0.40, 0.75, 0.95, 1.02)] == ["full", "economy", "minimal", "stop"]
+
+# v2.1 Witness F: THIN_PUBLISH_FLOOR, Fixed-Point MC Simplex Floor + restore_option_names & Mantic Open-Tail Floor (§11.2, §11.4)
+def apply_publish_floor(p, survivors, normal_bounds=(0.02, 0.98), thin_bounds=(0.05, 0.95)):
+    lo, hi = thin_bounds if survivors == 1 else normal_bounds
+    return min(max(p, lo), hi)
+
+assert apply_publish_floor(0.01, survivors=1) == 0.05
+assert apply_publish_floor(0.99, survivors=1) == 0.95
+assert apply_publish_floor(0.01, survivors=3) == 0.02
+
+def fixed_point_simplex_floor(probs, floor=0.01):
+    n = len(probs)
+    assert floor * n < 1.0
+    p = [max(0.0, float(x)) for x in probs]
+    s = sum(p)
+    p = [x / s if s > 0 else 1.0 / n for x in p]
+    for _ in range(32):
+        below = [i for i, x in enumerate(p) if x < floor - 1e-15]
+        if not below:
+            break
+        fixed = set(below)
+        rem_mass = 1.0 - floor * len(fixed)
+        free_sum = sum(p[i] for i in range(n) if i not in fixed)
+        for i in range(n):
+            if i in fixed:
+                p[i] = floor
+            else:
+                p[i] = (p[i] / free_sum) * rem_mass
+    return p
+
+mc_floored = fixed_point_simplex_floor([0.995, 0.002, 0.002, 0.001], floor=0.01)
+assert abs(sum(mc_floored) - 1.0) < 1e-12 and all(x >= 0.01 - 1e-12 for x in mc_floored)
+
+def restore_option_names(predicted_map, canonical_options):
+    def norm(s):
+        return " ".join(s.replace("\u2013", "-").replace("\u2014", "-").strip().lower().split())
+    canon_idx = {norm(opt): opt for opt in canonical_options}
+    out = {}
+    for k, v in predicted_map.items():
+        nk = norm(k)
+        assert nk in canon_idx, f"Unknown option label: {k}"
+        out[canon_idx[nk]] = v
+    assert set(out.keys()) == set(canonical_options), "Missing canonical option in multiset"
+    return out
+
+restored = restore_option_names({"10 - 20%": 0.4, "20 - 30%": 0.6}, ["10 – 20%", "20 – 30%"])
+assert restored == {"10 – 20%": 0.4, "20 – 30%": 0.6}
+
+def enforce_mantic_open_tail_floor(pmf, open_lower, open_upper, tail_floor=0.05):
+    assert 2 <= len(pmf) <= 31
+    p = list(pmf)
+    if open_lower and p[0] < tail_floor:
+        p[0] = tail_floor
+    if open_upper and p[-1] < tail_floor:
+        p[-1] = tail_floor
+    # Re-normalize interior bins while keeping floored open tails >= tail_floor
+    locked = (open_lower and p[0] == tail_floor), (open_upper and p[-1] == tail_floor)
+    locked_sum = (tail_floor if locked[0] else 0.0) + (tail_floor if locked[1] else 0.0)
+    free_idx = [i for i in range(len(p)) if not ((i == 0 and locked[0]) or (i == len(p) - 1 and locked[1]))]
+    free_sum = sum(p[i] for i in free_idx)
+    rem = 1.0 - locked_sum
+    for i in free_idx:
+        p[i] = p[i] * (rem / free_sum)
+    return p
+
+m_pmf = enforce_mantic_open_tail_floor([0.005, 0.49, 0.50, 0.005], True, True, tail_floor=0.05)
+assert abs(sum(m_pmf) - 1.0) < 1e-12 and m_pmf[0] >= 0.05 and m_pmf[-1] >= 0.05
+
+# v2.1 Witness G: ValueExtractionLadder Rejecting Duplicate Keys, Booleans & Truncated Literals (§11.2)
+import json
+
+def parse_strict_prob_json(raw_text):
+    def no_dup_pairs(pairs):
+        obj = {}
+        for k, v in pairs:
+            if k in obj:
+                raise ValueError(f"DUPLICATE_JSON_KEY:{k}")
+            obj[k] = v
+        return obj
+    try:
+        parsed = json.loads(raw_text, object_pairs_hook=no_dup_pairs)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"TRUNCATED_OR_INVALID_JSON:{exc}") from exc
+    val = parsed.get("probability")
+    if isinstance(val, bool) or not isinstance(val, (int, float)) or not (0.0 <= float(val) <= 1.0):
+        raise ValueError("INVALID_PROBABILITY_TYPE_OR_RANGE")
+    return float(val)
+
+assert parse_strict_prob_json('{"probability": 0.42}') == 0.42
+for bad_payload, expected_err in [
+    ('{"probability": 0.20, "probability": 0.80}', "DUPLICATE_JSON_KEY"),
+    ('{"probability": true}', "INVALID_PROBABILITY_TYPE_OR_RANGE"),
+    ('{"probability": 0.4', "TRUNCATED_OR_INVALID_JSON"),
+]:
+    try:
+        parse_strict_prob_json(bad_payload)
+        assert False, f"Should have rejected: {bad_payload}"
+    except ValueError as exc:
+        assert expected_err in str(exc), str(exc)
+
 print("ALL_EXTENDED_VALIDATION_CHECKS_PASSED")
