@@ -108,8 +108,9 @@ impl ConjugateBelief {
         kappa_lr: f64,
         eta_shock: f64,
     ) -> Self {
+        let dt_safe = dt_hours.max(0.0);
         let tau_eff = effective_half_life_hours(domain, t_rem_h, surprise_ewma, 0.8);
-        let gamma = 2.0_f64.powf(-dt_hours / tau_eff);
+        let gamma = 2.0_f64.powf(-dt_safe / tau_eff);
         let mu_anc = anchor_mean(mu0, geometry, t_rem_h, t_tot_h);
         let a_pre = gamma * self.alpha + (1.0 - gamma) * n0 * mu_anc;
         let b_pre = gamma * self.beta + (1.0 - gamma) * n0 * (1.0 - mu_anc);
@@ -118,7 +119,8 @@ impl ConjugateBelief {
 
         let (dl, diag) = match direction {
             Direction::Still => (0.0, 0.0),
-            Direction::Up | Direction::Down => (delta_ll, diagnosticity),
+            Direction::Up => (delta_ll.max(0.0), diagnosticity.max(0.0)),
+            Direction::Down => (delta_ll.min(0.0), diagnosticity.max(0.0)),
         };
         let w_t = novelty * diag;
         let mu_post = sigmoid(logit(mu_pre) + kappa_lr * novelty * dl);
@@ -211,8 +213,24 @@ pub fn should_stop_fold(
     if fold_count < 2 || productive_folds < 2 {
         return (StopDecision::IneligibleMin2Folds, 0.0);
     }
-    let hyp_ent: f64 = hyps.iter().map(|(w, ph)| w * entropy_bern(*ph)).sum();
-    let i_hyp = (entropy_bern(p_k) - hyp_ent).max(0.0);
+    let w_sum: f64 = hyps
+        .iter()
+        .map(|(w, _)| if w.is_finite() && *w > 0.0 { *w } else { 0.0 })
+        .sum();
+    let i_hyp = if w_sum > 0.0 {
+        let mut p_mix = 0.0_f64;
+        let mut hyp_ent = 0.0_f64;
+        for (w, ph) in hyps {
+            if w.is_finite() && *w > 0.0 {
+                let wn = *w / w_sum;
+                p_mix += wn * ph.clamp(PROB_EPS, 1.0 - PROB_EPS);
+                hyp_ent += wn * entropy_bern(*ph);
+            }
+        }
+        (entropy_bern(p_mix) - hyp_ent).max(0.0)
+    } else {
+        0.0
+    };
     let mut best_voi = 0.0_f64;
 
     for c in cruxes {
@@ -245,7 +263,11 @@ pub fn prior_shift_prob(q_train: f64, pi_train: f64, pi_real: f64) -> f64 {
 pub struct KalmanBlendResult {
     pub p_post: ProbClamped,
     pub post_var: f64,
+    /// Full Gaussian KL `KL(N(mu1, v1) || N(mu0, v0))` (includes variance contraction).
     pub bayesian_surprise_nats: f64,
+    /// Mean-shift (Mahalanobis) surprise `0.5 * (mu1 - mu0)^2 / v0` — strictly `0.0` when
+    /// `p_market == p_indep`, preventing spurious fold wakeups on liquid agreement.
+    pub mean_shift_surprise_nats: f64,
 }
 
 #[must_use]
@@ -262,26 +284,30 @@ pub fn kalman_market_blend(
     let k_gain = v0 / (v0 + r_t);
     let mu1 = mu0 + k_gain * (p_market.logit() - mu0);
     let v1 = (1.0 - k_gain) * v0;
+    let mean_shift = 0.5 * ((mu1 - mu0).powi(2) / v0);
     // Closed-form KL(N(mu1, v1) || N(mu0, v0))
-    let kl = 0.5 * ((v1 / v0) + ((mu1 - mu0).powi(2) / v0) - 1.0 + (v0 / v1).ln());
+    let kl = 0.5 * ((v1 / v0) - 1.0 + (v0 / v1).ln()) + mean_shift;
     KalmanBlendResult {
         p_post: ProbClamped::clamp_lossy(sigmoid(mu1)),
         post_var: v1,
         bayesian_surprise_nats: kl.max(0.0),
+        mean_shift_surprise_nats: mean_shift.max(0.0),
     }
 }
 
 /// Gated ridge-to-identity Platt + uncertainty-conditioned extremizing (`§12.7`).
+/// Requires both `resolved_n >= 100` AND `eras_sign_stable == true` (`>= 2` disjoint eras).
 #[must_use]
 pub fn recalibrate_gated(
     p: ProbClamped,
     resolved_n: usize,
+    eras_sign_stable: bool,
     a_ridge: f64,
     b_ridge: f64,
     uncertainty_u: f64,
     d_max: f64,
 ) -> ProbClamped {
-    if resolved_n < 100 {
+    if resolved_n < 100 || !eras_sign_stable {
         return p;
     }
     let u = uncertainty_u.clamp(0.0, 1.0);
@@ -365,6 +391,49 @@ mod tests {
             0.10,
         );
         assert!(deep.bayesian_surprise_nats > 10.0 * thin.bayesian_surprise_nats);
+        assert!(deep.mean_shift_surprise_nats > 10.0 * thin.mean_shift_surprise_nats);
+
+        // Agreement on a deep book MUST produce zero mean-shift surprise (no spurious wake)
+        let agree = kalman_market_blend(
+            ProbClamped::new(0.40).expect("p"),
+            0.25,
+            ProbClamped::new(0.40).expect("p"),
+            0.90,
+            0.10,
+        );
+        assert!(agree.mean_shift_surprise_nats.abs() < 1e-12);
+        assert!(agree.bayesian_surprise_nats > 0.15);
+    }
+
+    #[test]
+    fn stream_step_enforces_direction_sign_and_nonnegative_dt_and_multi_era_platt_gate() {
+        let base = ConjugateBelief {
+            alpha: 5.0,
+            beta: 5.0,
+        };
+        // Negative delta_ll with Direction::Up is clamped to 0 (cannot move belief down); negative dt clamped to 0
+        let bad_up = base.stream_step(
+            0.50,
+            10.0,
+            DomainKind::Cyber,
+            HorizonGeometry::PointInTime,
+            -12.0,
+            100.0,
+            200.0,
+            0.5,
+            Direction::Up,
+            -0.8,
+            0.5,
+            1.0,
+            1.35,
+            0.6,
+        );
+        assert!((bad_up.mean() - 0.50).abs() < 1e-12);
+
+        // Multi-era sign stability gate blocks Platt even when resolved_n >= 100
+        let p = ProbClamped::new(0.30).expect("p");
+        assert_eq!(recalibrate_gated(p, 150, false, 1.2, 0.1, 0.2, 1.35), p);
+        assert_ne!(recalibrate_gated(p, 150, true, 1.2, 0.1, 0.2, 1.35), p);
     }
 
     proptest! {

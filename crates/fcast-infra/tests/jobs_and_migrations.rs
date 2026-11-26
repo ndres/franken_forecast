@@ -199,9 +199,160 @@ fn gate_02_forward_migration_0002_and_lossless_v1_to_v2_upcast() {
     assert!((p_indep - 0.30).abs() < 1e-12);
     assert!((shift - 0.0).abs() < 1e-12);
 
-    // Confirm _fcast_migrations recorded both version 1 and 2
+    // Confirm _fcast_migrations recorded versions 1, 2, and 4
     let cnt: i64 = conn
         .query_row("SELECT COUNT(*) FROM _fcast_migrations", [], |r| r.get(0))
         .expect("count");
-    assert_eq!(cnt, 2);
+    assert_eq!(cnt, 3);
+}
+
+#[test]
+fn adversarial_m1_5_temporal_ms_immutability_chain_and_wal_backup() {
+    use fcast_infra::store::parse_rfc3339_epoch_ms;
+
+    // 1. Millisecond vs whole-second RFC3339 ordering (fixes ASCII 'Z' > '.' bug)
+    let whole = parse_rfc3339_epoch_ms("2026-11-25T10:00:00Z").expect("whole");
+    let half_after = parse_rfc3339_epoch_ms("2026-11-25T10:00:00.500Z").expect("ms");
+    let tz_equiv = parse_rfc3339_epoch_ms("2026-11-25T05:00:00-05:00").expect("tz");
+    assert_eq!(half_after - whole, 500);
+    assert_eq!(tz_equiv, whole);
+
+    let dir = TempDir::new().expect("tempdir");
+    let store = OperationalStore::open(dir.path().join("db/ops.fsqlite")).expect("open");
+    let conn = store.connection();
+    conn.execute(
+        "INSERT INTO questions VALUES ('q1', 'metaculus', 'Adv Q', 'sha1', 'point_in_time', '2026-11-01T00:00:00Z')",
+        [],
+    )
+    .expect("q1");
+    conn.execute(
+        "INSERT INTO forecast_streams VALUES ('fc1', 'q1', 'live_tournament', NULL)",
+        [],
+    )
+    .expect("fc1");
+    conn.execute(
+        "INSERT INTO evidence_vault_index VALUES ('[ev:1111#ok]', '1111', 'ok', '2026-11-25T10:00:00Z', 4, 0)",
+        [],
+    )
+    .expect("ev ok");
+    conn.execute(
+        "INSERT INTO evidence_vault_index VALUES ('[ev:2222#ms]', '2222', 'ms', '2026-11-25T10:00:00.500Z', 4, 0)",
+        [],
+    )
+    .expect("ev ms");
+    conn.execute(
+        "INSERT INTO question_gold_dossiers VALUES ('q1', '[ev:1111#ok]', '2026-11-25T10:00:00Z')",
+        [],
+    )
+    .expect("gold");
+
+    // 2. Immutability triggers on evidence_vault_index and question_gold_dossiers
+    assert!(
+        conn.execute(
+            "UPDATE evidence_vault_index SET available_utc = '2020-01-01T00:00:00Z' WHERE ev_handle = '[ev:2222#ms]'",
+            [],
+        )
+        .is_err()
+    );
+    assert!(
+        conn.execute(
+            "UPDATE question_gold_dossiers SET gold_dossier_handle = '[ev:2222#ms]' WHERE question_id = 'q1'",
+            [],
+        )
+        .is_err()
+    );
+
+    // 3. +500ms evidence MUST be rejected against whole-second cutoff
+    let rev_future_ms = UnsealedForecastRevision {
+        forecast_id: "fc1".into(),
+        seq_no: 0,
+        parent_revision_id: None,
+        question_id: "q1".into(),
+        as_of_utc: "2026-11-25T10:00:00Z".into(),
+        p_indep: ProbClamped::new(0.40).expect("p"),
+        p_market: None,
+        probability_distribution: OutcomeDistribution::Binary {
+            p: ProbClamped::new(0.40).expect("p"),
+            n_eff: 4.0,
+        },
+        evidence_handles: vec![VerifiedEvidenceRef::parse("[ev:2222#ms]").expect("h")],
+        model_version: "m@v1".into(),
+        calibration_version: "cal-v1".into(),
+        rationale_handle: VerifiedEvidenceRef::parse("[ev:1111#ok]").expect("rat"),
+        resolution_status: ResolutionStatusAtCutoff::Unresolved,
+    }
+    .seal()
+    .expect("seal");
+    assert!(matches!(
+        store.seal_forecast_revision(&rev_future_ms),
+        Err(StoreError::TemporalFenceViolation { .. })
+    ));
+
+    // 4. Valid rev0 + non-monotonic child rev1 rejection
+    let rev0 = UnsealedForecastRevision {
+        forecast_id: "fc1".into(),
+        seq_no: 0,
+        parent_revision_id: None,
+        question_id: "q1".into(),
+        as_of_utc: "2026-11-25T10:00:00Z".into(),
+        p_indep: ProbClamped::new(0.40).expect("p"),
+        p_market: None,
+        probability_distribution: OutcomeDistribution::Binary {
+            p: ProbClamped::new(0.40).expect("p"),
+            n_eff: 4.0,
+        },
+        evidence_handles: vec![VerifiedEvidenceRef::parse("[ev:1111#ok]").expect("h")],
+        model_version: "m@v1".into(),
+        calibration_version: "cal-v1".into(),
+        rationale_handle: VerifiedEvidenceRef::parse("[ev:1111#ok]").expect("rat"),
+        resolution_status: ResolutionStatusAtCutoff::Unresolved,
+    }
+    .seal()
+    .expect("seal");
+    store.seal_forecast_revision(&rev0).expect("persist rev0");
+
+    let rev1_backwards = UnsealedForecastRevision {
+        forecast_id: "fc1".into(),
+        seq_no: 1,
+        parent_revision_id: Some(rev0.revision_id.clone()),
+        question_id: "q1".into(),
+        as_of_utc: "2026-11-25T09:59:59Z".into(),
+        p_indep: ProbClamped::new(0.45).expect("p"),
+        p_market: None,
+        probability_distribution: OutcomeDistribution::Binary {
+            p: ProbClamped::new(0.45).expect("p"),
+            n_eff: 5.0,
+        },
+        evidence_handles: vec![],
+        model_version: "m@v1".into(),
+        calibration_version: "cal-v1".into(),
+        rationale_handle: VerifiedEvidenceRef::parse("[ev:1111#ok]").expect("rat"),
+        resolution_status: ResolutionStatusAtCutoff::Unresolved,
+    }
+    .seal()
+    .expect("seal");
+    assert!(matches!(
+        store.seal_forecast_revision(&rev1_backwards),
+        Err(StoreError::ChainInvariantViolation(_))
+    ));
+
+    // 5. WAL checkpoint before Zstd-9 backup guarantees rev0 survives decompression restore
+    let backup = store
+        .create_verified_zstd_backup(dir.path().join("backups/checkpointed.fsqlite.zst"))
+        .expect("backup");
+    let compressed = std::fs::read(&backup.backup_path).expect("read zst");
+    let raw = zstd::stream::decode_all(&compressed[..]).expect("decompress");
+    let restored_path = dir.path().join("restored/ops.fsqlite");
+    std::fs::create_dir_all(restored_path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(&restored_path, raw).expect("write restored");
+    let restored = OperationalStore::open(&restored_path).expect("open restored");
+    let restored_cnt: i64 = restored
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM forecast_revisions WHERE revision_id = ?1",
+            [&rev0.revision_id],
+            |r| r.get(0),
+        )
+        .expect("count restored");
+    assert_eq!(restored_cnt, 1);
 }
