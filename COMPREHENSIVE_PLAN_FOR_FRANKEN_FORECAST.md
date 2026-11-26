@@ -34,7 +34,7 @@ Subsystem and gate maturity are tracked exclusively in `docs/delivery/DELIVERY_L
 
 Nothing in this repository's Rust crate graph is implemented as of `Plan v2.0` (`0` `[MEASURED]` `.rs` files exist). A subsystem, command verb, or gate **MUST NOT** be described as *Implemented* until **all eight (`8` `[BUDGET]`) mandatory conditions** hold simultaneously:
 
-1. **Zero Stubs & Strict Toolchain:** Compiles cleanly under `nightly-2026-11-01` (Rust Edition 2024 `[UPSTREAM-SPEC]`) with `#![deny(clippy::todo, clippy::unimplemented, clippy::unwrap_used)]` and `#![forbid(unsafe_code)]` outside the audited `<= 120` `[BUDGET]` LOC POSIX FD/lock module (`fcast-infra::sys`).
+1. **Zero Stubs & Strict Toolchain:** Compiles cleanly under `nightly-2026-08-31` (matching upstream Franken Suite Rust Edition 2024 `[UPSTREAM-SPEC]`) with `#![deny(clippy::todo, clippy::unimplemented, clippy::unwrap_used)]` and `#![forbid(unsafe_code)]` outside the audited `<= 120` `[BUDGET]` LOC POSIX FD/lock module (`fcast-infra::sys`).
 2. **Dependency Hygiene:** Passes `cargo deny check bans advisories licenses sources` with singleton `asupersync` (`0` `[BUDGET]` instances of `tokio`, `reqwest`, `hyper`, `ort`, `openssl-sys`, `rusqlite`, `sqlx`, or `petgraph`).
 3. **Deterministic Wire & Revision Schemas:** Every CLI `--json` output, `fcast-mcp` payload, and serialized `ForecastRevision` validates against a committed JSON Schema (`schemas/v1/*.schema.json`).
 4. **Cancel & Crash Safety:** Survives `Asupersync` structured task cancellation and simulated `SIGKILL` mid-transaction without WAL corruption, partial `ForecastRevision` writes, orphaned Gemini Files API uploads, or leaked file descriptors (`0` `[TARGET]` leaked FDs).
@@ -779,7 +779,7 @@ Per `§0.7` Rule 6, **every gate maps to exactly one primary `CLAIM-XX`**, and e
 
 | Risk ID | Failure Scenario | Severity | Concrete Architectural Mitigation |
 | :--- | :--- | :--- | :--- |
-| `RISK-01` | Nightly compiler / `asupersync` rev skew breaks workspace build. | High | Pin `nightly-2026-11-01` in `rust-toolchain.toml` + `Cargo.lock` + vendored fallback if needed. |
+| `RISK-01` | Nightly compiler / `asupersync` rev skew breaks workspace build. | High | Pin `nightly-2026-08-31` (matching upstream Franken Suite) in `rust-toolchain.toml` + `Cargo.lock` + vendored fallback if needed. |
 | `RISK-02` | Breaking geopolitical crisis triggers runaway overnight cloud API spend. | Critical | Hard `daemon_budget_ledger` (`\$5.00/day` `[BUDGET]`) + `Frankensearch` `model2vec` deduplication + `sentinel_alert_ledger` `6 h` cooldown. |
 | `RISK-03` | Retroactive mutation or latest-row selection corrupts longitudinal calibration replay. | Critical | SQLite `BEFORE UPDATE/DELETE` triggers on `forecast_revisions` + mandatory `HorizonForecastView` projection + disjoint `question_resolutions` (`GATE-04..06`). |
 | `RISK-04` | High-frequency L2 orderbook polling bloats `ops.fsqlite` WAL. | High | Stream raw L2 snapshots directly to monthly `Zstd` Parquet (`Tier W1`); store only `1 m`/`5 m` marks & `ForecastRevision.p_market` in SQLite. |

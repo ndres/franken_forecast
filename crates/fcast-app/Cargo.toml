@@ -1,0 +1,28 @@
+[package]
+name = "fcast-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "L5 FrankenForecast CLI (fcast), offline auditor (fcast-verify), daemon, MCP, and Cockpit."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "fcast"
+path = "src/main.rs"
+
+[dependencies]
+fcast-core.workspace = true
+fcast-infra.workspace = true
+fcast-ingest.workspace = true
+fcast-epistemic.workspace = true
+fcast-bench.workspace = true
+fsqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

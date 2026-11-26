@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned to match upstream Franken Suite (frankensqlite, asupersync, franken_numpy)
+# so Edition 2024 features and clippy -D warnings gates remain 100% deterministic.
+channel = "nightly-2026-08-31"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

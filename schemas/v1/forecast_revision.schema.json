@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ndres/franken_forecast/schemas/v1/forecast_revision.schema.json",
+  "title": "ForecastRevision",
+  "description": "Canonical immutable 12-field ForecastRevision record (KA-00, §7.1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "forecast_id",
+    "revision_id",
+    "seq_no",
+    "parent_revision_id",
+    "question_id",
+    "as_of_utc",
+    "p_indep",
+    "p_market",
+    "probability_distribution",
+    "evidence_handles",
+    "model_version",
+    "calibration_version",
+    "rationale_handle",
+    "resolution_status"
+  ],
+  "properties": {
+    "forecast_id": { "type": "string", "minLength": 1 },
+    "revision_id": { "type": "string", "pattern": "^rev_[0-9a-f]{64}$" },
+    "seq_no": { "type": "integer", "minimum": 0 },
+    "parent_revision_id": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^rev_[0-9a-f]{64}$" }
+      ]
+    },
+    "question_id": { "type": "string", "minLength": 1 },
+    "as_of_utc": { "type": "string", "format": "date-time" },
+    "p_indep": { "type": "number", "minimum": 1e-6, "maximum": 0.999999 },
+    "p_market": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "number", "minimum": 1e-6, "maximum": 0.999999 }
+      ]
+    },
+    "probability_distribution": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["binary", "categorical", "cdf201"] }
+      }
+    },
+    "evidence_handles": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^\\[ev:[0-9a-f]{6,64}#[A-Za-z0-9_.:-]+\\]$" }
+    },
+    "model_version": { "type": "string", "minLength": 1 },
+    "calibration_version": { "type": "string", "minLength": 1 },
+    "rationale_handle": {
+      "type": "string",
+      "pattern": "^\\[ev:[0-9a-f]{6,64}#[A-Za-z0-9_.:-]+\\]$"
+    },
+    "resolution_status": { "enum": ["unresolved", "resolved", "invalidated"] }
+  }
+}

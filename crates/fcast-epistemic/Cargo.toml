@@ -1,0 +1,16 @@
+[package]
+name = "fcast-epistemic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SUB-03 Notary & SUB-04 Loom epistemic reasoning, bi-temporal verification, and belief folding."
+
+[lints]
+workspace = true
+
+[dependencies]
+fcast-core.workspace = true
+fcast-infra.workspace = true
+fcast-ingest.workspace = true
+serde.workspace = true
+thiserror.workspace = true

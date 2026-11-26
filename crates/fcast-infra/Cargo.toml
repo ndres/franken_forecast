@@ -1,0 +1,22 @@
+[package]
+name = "fcast-infra"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "L1 Chronicle WAL/MVCC store, EvidenceVault, transactional domain_events outbox, DurableJobStore, and SafeExternalFetch."
+
+[lints]
+workspace = true
+
+[dependencies]
+fcast-core.workspace = true
+fsqlite.workspace = true
+blake3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

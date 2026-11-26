@@ -1,0 +1,17 @@
+[package]
+name = "fcast-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SUB-05 Crucible meta-forecaster, full-universe 10-metric scorecard, FutureEval & ForecastBench runners."
+
+[lints]
+workspace = true
+
+[dependencies]
+fcast-core.workspace = true
+fcast-infra.workspace = true
+fcast-ingest.workspace = true
+fcast-epistemic.workspace = true
+serde.workspace = true
+thiserror.workspace = true

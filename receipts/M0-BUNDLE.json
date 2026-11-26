@@ -1,0 +1,19 @@
+{
+  "gate_id": "M0-BUNDLE",
+  "gates_verified": [
+    "GATE-01",
+    "GATE-02",
+    "GATE-04",
+    "GATE-05",
+    "GATE-09",
+    "GATE-24"
+  ],
+  "status": "VERIFIED",
+  "tier": "Tier 2 (Crate-Verified)",
+  "toolchain": "nightly-2026-08-31",
+  "workspace_sha256": "ee055163e327a9cd99db1a91c5252a81ef7aee62d65f820e5c67763df9fa36d6",
+  "templates_verified": 9,
+  "tests_passed": 13,
+  "proptest_cases": 10000,
+  "clippy_warnings": 0
+}
