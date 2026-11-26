@@ -10,7 +10,8 @@
 | **[02. `Schokolade12138/metac-bot-template`](#competitor-02--schokolade12138metac-bot-template-sakuraqkl)** | `main` (`+1,450` LOC over `metac-bot-template`, `3` test files) | Fall 2026 FutureEval entrant (`sakuraqkl`, lightweight fork) | FutureEval + MiniBench (`bot-testing-area` smoke test) | Python (`forecasting-tools`, OpenRouter `paid`/`free` profiles), GitHub Actions | Zero-key free research (Google News RSS + Polymarket/Manifold public search), iterative fixed-point MC simplex flooring, 2-tier credit auto-downgrade (`< \$8` cheap, `< \$0.50` stop), cross-vendor failover retry, type-stratified smoke test | Silent exit-0 crash swallowing, zero numeric/date/Mantic guards, blind `[:40_000]` research truncation, no market blinding, no resolution-source fetch or gap-fill, no longitudinal updating |
 | **[03. `Poke1997/metac-firefly26710`](#competitor-03--poke1997metac-firefly26710)** | `main` @ `4e675a5` (`4,322` LOC, `0` test files) | Fall 2026 FutureEval + Metaculus Cup entrant | FutureEval, Metaculus Cup, `test_bot` | Python (`forecasting-tools`, Anthropic-only + `bot-data` git branch + Claude `review-bot` skill) | **Control/Control/Challenger** bounded-risk live A/B slots, auto-expiring **shadow forecasts** (`SHADOWS_UNTIL`), shared-context prompt-cache splitting, 4-tier billing-cycle budget pacing (`70%/90%/100%`), daily `model_watch`, cheapest-first read-only `review-bot` skill | Single-vendor (Anthropic-only) monoculture, `0` automated tests, GitHub Actions cache budget ledger (eviction resets spend), no numeric/Mantic/ForecastBench guards, no longitudinal updating or market blinding |
 | **[04. `evjohn0418-arch/metac-bot-template`](#competitor-04--evjohn0418-archmetac-bot-template)** | `main` (`55` commits, `4` test files / `~1,800` LOC tests) | Fall 2026 FutureEval + MiniBench live entrant (`~\$0.09–\$0.15/Q` real spend) | FutureEval (`main`) + MiniBench + `bot-testing-area` | Python (`forecasting-tools` untouched `main.py` + `agent/{guard,coverage,probe}.py`), GitHub Actions | Prize-weighted season spend planner (`4` main vs `2` MiniBench), real billing-delta cost calibration (`usage_before[t+1] - usage_before[t]`), `max_tokens` + `inflight_share` pre-auth batching, `skip_after_spot_scoring_time`, `\$0` HTTP 402 cutoff probe, quiet-period alarms + secret scrubbing, `parser.temperature=0` | Unchanged starter prompts/research, **zero probability/numeric/Mantic guards**, no resolution-source fetch or gap-fill, GitHub Actions fork auto-disabled workflows (20.7h outage), single-shot only, no ForecastBench or market blinding |
-| *(Reserved: Competitor 05)* | *Pending next analysis* | — | — | — | — | — |
+| **[05. `foggysteam/metaculus-bot`](#competitor-05--foggysteammetaculus-bot-kcap20)** | `main` (`13,988` LOC, `3` test files, `40+` tests, rich `PROGRESS.md` & `backtest/RESULTS.md`) | Top-17% MiniBench (`72nd/435`), live FutureEval + Market Pulse + Animal Futures (`£0` API spend via Max CLI) | FutureEval, MiniBench, **Market Pulse (`\$7.5k`)**, **Animal Futures (`\$3.4k`, time-avg!)** | Python (`claude -p` Max CLI + `raw_data_server.py` MCP + chained GHA + local PC `backup.py`) | **Controlled A/B science (`RESULTS.md`):** raw-data MCP tool (`+7.0` pts/Q, 16/18 wins), 13 vs 6 percentiles (`+10.3–12.3` pts/Q), 3–5 yr seasonal calendar note (`+5.5` pts/Q), 2 independent research reports (`3.75×` more diversity than prompt framing), Market Pulse 30h pre-spot refresh + Animal Futures 7d refresh, auto-discovery of prize-eligible bot tournaments, exact en-dash MC option restoration | Single-vendor (Claude Opus only), no pre-seal market blinding, no Mantic or ForecastBench, flat JSON/`index.csv` storage (suffered git-rebase log loss), no interactive TUI |
+| *(Reserved: Competitor 06)* | *Pending next analysis* | — | — | — | — | — |
 
 ---
 
@@ -222,3 +223,58 @@ Instead, **fold six high-ROI upgrades incrementally into `Plan v2.1` and `M1`** 
 1. **Untouched Starter Template (`main.py`) & Zero Forecasting Upgrades:** Uses default template prompts and AskNews/Sonar-Pro only—zero resolution-source fetching, zero gap-fill, zero time-series anchors, zero value-extraction fidelity ladder.
 2. **Zero Probability / Numeric / Mantic Guards:** `agent/guard.py` is strictly a *spend* guard—there is no binary `[0.02, 0.98]` clamp, no MC simplex floor, no PCHIP/discrete/Mantic `>= 5%` open-tail floor, and no `THIN_PUBLISH_FLOOR`.
 3. **Single-Shot Only, No Pre-Seal Market Blinding, No Bi-Temporal Discipline, No Mantic or ForecastBench.**
+
+---
+
+## Competitor 05 · `foggysteam/metaculus-bot` (`KCAP2.0`)
+
+* **Repository:** `https://github.com/foggysteam/metaculus-bot` (`13,988` LOC, `PROGRESS.md`, `backtest/RESULTS.md`, `raw_data_server.py`, `market_pulse.py`, `animal_futures.py`, `watchdog.py`, `backup.py`)
+* **Competitions Targeted:** **All four Metaculus prize-eligible bot tracks** discovered programmatically via `/api/projects/tournaments/` (`bot_leaderboard_status ∈ {bots_only, include}`):
+  1. **FutureEval Fall 2026** (`\$50,000`, `bots_only`, spot peer)
+  2. **MiniBench** (`\$1,000`/round, `bots_only`, spot peer — **72nd / 435, top 17%** on Nov 2 round)
+  3. **Market Pulse Challenge (`market-pulse-26q4` / `27q1`, `\$7,500`, `include`)** — forecasts on sight AND **re-forecasts once within 30h of `spot_scoring_time`** (`market_pulse.py`)
+  4. **Animal Futures (`project 33016`, `\$3,400`, `include`)** — **time-averaged peer score**, refreshed every **7 days** to keep active forecasts on `>= 2` of the `3` long-horizon questions (`animal_futures.py`)
+
+### 1. Highest-Value Empirical Findings from `backtest/RESULTS.md` & `PROGRESS.md`
+
+| Controlled Experiment (`foggysteam`) | Measured Effect (95% CI) | Actionable Takeaway for `franken_forecast` |
+| :--- | :--- | :--- |
+| **Fetch-Only Raw-Data MCP Tool (`raw_data_server.py` reading raw CSV/JSON dashboards directly, private IPs & Metaculus blocked)** | **`+7.0` pts/Q** on 18 resolved shadow Qs (**16 wins, 1 loss**; `+52.8` binary, `+62.8` numeric, `+10.0` discrete) at only `+6%` token cost & *faster* median latency (`3.3m` vs `3.6m`) | **#1 highest-ROI research upgrade:** Expose a read-only `fetch_raw_data` tool (built directly on our SSRF-hardened `SafeExternalFetch`) to `Loom`/`Harvester` so researchers pull raw CSV/JSON/API files behind resolution dashboards without lossy summarization! |
+| **13 Percentiles (`1..99` + tail rule) vs. 6 Percentiles (`10..90`) (`n1`, `n2`)** | **`+10.3` to `+12.3` pts/Q** (`+5.1` to `+20.5`) | **Lock `13` canonical percentiles (`1, 2.5, 5, 10, 20, 40, 50, 60, 80, 90, 95, 97.5, 99`)** as `fcast`'s mandatory numeric/date elicitation grid. |
+| **3–5 Year Same-Calendar-Window Seasonal Note (`SEASONAL_NOTE`, `s1`)** | **`+5.5` pts/Q** (`+0.5` to `+10.6`: CDC `+10.0`, FRED `+13.3`) at `\$0` extra cost | **Add `SEASONAL_NOTE` to `Loom`'s numeric/discrete research prompts** (same calendar window over prior 3–5 years). |
+| **Two Independent Research Reports + Cross-Reading Both (`v1+v1-r2`, `vb1`, `n2+n3`)** | Inter-report spread **`0.075`** vs. intra-report spread `0.020` (**`3.75×`**); cross-reading both beat live by `+1.2` (`43` vs `26`) and beat market (`+0.6` to `+0.9`) | **Research diversity >> prompt-framing diversity.** When running multi-fold or deep dives on high-VoI questions, run **2 independent research briefs** and let the ensemble read both. |
+| **Different Forecaster Framings (`outside view / inside view / devil's advocate`, `vfr1`)** | **`-0.9` pts/Q** (`-2.2` to `+0.2`, 16 better vs 35 worse); spread unchanged (`0.015` vs `0.016`) | **Do NOT waste ensemble slots on cosmetic persona/framing prompts** on the same research—invest in independent evidence/data retrieval instead. |
+| **Backtest Leakage Traps Caught (`vf1`, `score_shift.py`)** | Passing actual resolution date leaked early-Yes (`+13.5` artificial gain on `Fable`); sampling as-of `3–21d` before *actual* close inflated Yes base rate to `74%` vs `36%` on-schedule | **Directly validates `fcast`'s `HorizonForecastView` scheduled-horizon cutoffs** and proves offline backtests must scrub resolution dates from both prompts AND cached research lines. |
+
+### 2. Operational & Edge-Case Gems Worth Adopting
+
+1. **Automated Prize-Eligible Tournament Discovery (`weekly_report.tournaments_open_to_bots`):** Queries `/api/projects/tournaments/` for `bot_leaderboard_status ∈ {bots_only, include}` so new prize tracks (like `Market Pulse` and `Animal Futures`) are never missed by hardcoded name filters.
+2. **En-Dash / Unicode Option-Name Restoration (`restore_option_names`):** Maps normalized option keys back to exact platform option strings before submission (fixing Metaculus `400` rejections when an LLM turns `"rounds 1–3"` into `"rounds 1-3"`).
+3. **Date Forecasts Wholly Past Open Bounds (`date_distribution`):** When a legitimate date forecast lies entirely past an open upper bound (e.g., *"The Winds of Winter"*), anchors a point at the bound and compresses past-bound quantiles into the next `20%` of range rather than dropping the question.
+4. **Hard Child-Process-Killing Stage Timeouts + Chained Watchdog + Local Failover (`watchdog.py`, `backup.py`):** Bounds every stage (`AskNews 90s`, `evidence 240s`, `research 480s`, `forecast 240s`, `parser 120s`), auto-rescues unanswered open questions at `75 min`, and backs up cloud schedulers with a local machine daemon (`fcastd` natively owns this!).
+5. **Exact Leaderboard Position & Implied Crowd Back-Out:** Counts tied ranks accurately and backs out implied field probability on resolved peer-scored questions via `p_crowd = p_ours * exp(-peer_score / 100)`.
+
+### 3. Where `foggysteam` Falls Short
+
+1. **Single-Vendor Monoculture (Claude Opus Only):** No cross-vendor ensemble (`Gemini` / `OpenAI`).
+2. **No Pre-Seal Market Blinding (`INV-04`), No Mantic Crucible, No ForecastBench.**
+3. **Flat JSON + `index.csv` Persistence:** Suffered git merge-rebase conflicts that lost `18` MiniBench forecast logs before union-merge fixes—whereas `fcast`'s `fsqlite` WAL/MVCC `forecast_revisions` ledger is ACID-atomic and conflict-free.
+
+---
+
+## Cross-Competitor Synthesis: Top 10 Upgrades for `franken_forecast` (`Plan v2.1` & `M1`–`M3`)
+
+Combining all five competitors (`nostreambot`, `Schokolade12138`, `Poke1997`, `evjohn0418-arch`, `foggysteam`) yields **ten high-ROI, empirically validated additions** that fold cleanly on top of our `M0` Rust foundation (zero rewrite):
+
+| # | Upgrade | Source Competitor(s) | Target Crate / Milestone |
+| :--- | :--- | :--- | :--- |
+| 1 | **Expand Competition Coverage to Mantic Crucible + Market Pulse (30h pre-spot refresh) + Animal Futures (7d refresh) + auto-discovery of `bot_leaderboard_status ∈ {bots_only, include}`** | `01`, `05` | `fcast-ingest` (`M1`) |
+| 2 | **Fetch-Only Raw-Data Tool (`fetch_raw_data` over `SafeExternalFetch`) reading CSV/JSON/API dashboards directly** (`+7.0` pts/Q empirically!) | `05`, `01` | `fcast-infra` + `fcast-epistemic` (`M2`) |
+| 3 | **Lock 13 Canonical Percentiles + `SEASONAL_NOTE` (`+5.5` pts/Q) + Mantic Per-Bin PMF (`N <= 31`, pointwise mean) + `>= 5%` Mantic Open-Tail Floor + Open-Bound Date Compression + Exact MC Option Restoration + Fixed-Point MC Simplex Flooring** | `01`, `02`, `05` | `fcast-core::coherence` (`M1`) |
+| 4 | **Four-Rung Fidelity-Checked `ValueExtractionLadder` (`parser.temperature = 0`, duplicate-key/boolean/truncated-literal/multiset checks)** | `01`, `04` | `fcast-core` / `fcast-epistemic` (`M1`) |
+| 5 | **Close-Derived `TimeBudget` + `skip_after_spot_scoring_time` + Tightest-Deadline-First Queueing + `THIN_PUBLISH_FLOOR` (`[0.05, 0.95]` when `survivors == 1`)** | `01`, `04`, `05` | `fcast-core` + `fcast-infra::jobs` (`M1`) |
+| 6 | **Fail-Shut `skip_previously_forecasted` Guard + API Identity Preflight + Donated-Credit Platform Lock + Billing-Delta Cost Calibration + `max_tokens` Pre-Auth Batching + 4-Tier Cycle Budget Pacing** | `01`, `02`, `03`, `04` | `fcast-infra` + `fcast-ingest` (`M1`) |
+| 7 | **Zero-Key Free Research (`Google News RSS` + public Polymarket/Manifold search w/ `INV-04` blinding) for `GATE-24` & Quota Fallback** | `02` | `fcast-ingest` (`M1`) |
+| 8 | **Bounded-Risk `Control / Control / Challenger` Live A/B Slots + Auto-Expiring `shadow_experiment` Streams + Cache-Stable Prompt Prefix Splitting** | `03` | `fcast-epistemic` (`M3`) |
+| 9 | **Binding Red-Team + Shared-Brief `load_bearing_claims` Verification + Two Independent Research Reports on High-VoI Qs** (skipping cosmetic framing prompts!) | `01`, `05` | `fcast-epistemic` (`M3`) |
+| 10 | **Cheapest-First Read-Only Postmortem Skill (`review-bot`) + Offline Network-Egress Guard & Branch Coverage in Tests** | `01`, `03`, `04` | `fcast-app` / CI (`M1`–`M3`) |
