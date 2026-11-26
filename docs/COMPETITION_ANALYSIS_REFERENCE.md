@@ -7,7 +7,8 @@
 | Competitor / Repo | Branch / Snapshot | Verified Rank / Track Record | Competitions Targeted | Core Stack | Primary Edge vs. `fcast` | Primary Weakness vs. `fcast` |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **[01. `No-Stream/nostreambot-metaculus-bot`](#competitor-01--no-streamnostreambot-metaculus-bot)** | `gemini-4-hydrogen-research` (`317k` LOC, `389` test files) | **15th / 277** Summer 2026 FutureEval (`~3,240` spot peer pts / `256` Qs, above all-bots ensemble) | FutureEval, MiniBench, Metaculus Cup, **Mantic Crucible** | Python 3.12 (`forecasting-tools`), GitHub Actions + `cron-job.org` | Battle-tested Mantic support, close-aware time budgeting, 4-rung fidelity-checked extraction ladder, shared-brief verification gap-fill, 389 offline tests w/ socket egress guard | Single-shot (zero longitudinal updating), `~\$2.60/Q` flat spend (no ForecastBench), no pre-seal market blinding, no bi-temporal vintage discipline, heavy Python framework monkeypatching |
-| *(Reserved: Competitor 02)* | *Pending next analysis* | — | — | — | — | — |
+| **[02. `Schokolade12138/metac-bot-template`](#competitor-02--schokolade12138metac-bot-template-sakuraqkl)** | `main` (`+1,450` LOC over `metac-bot-template`, `3` test files) | Fall 2026 FutureEval entrant (`sakuraqkl`, lightweight fork) | FutureEval + MiniBench (`bot-testing-area` smoke test) | Python (`forecasting-tools`, OpenRouter `paid`/`free` profiles), GitHub Actions | Zero-key free research (Google News RSS + Polymarket/Manifold public search), iterative fixed-point MC simplex flooring, 2-tier credit auto-downgrade (`< \$8` cheap, `< \$0.50` stop), cross-vendor failover retry, type-stratified smoke test | Silent exit-0 crash swallowing, zero numeric/date/Mantic guards, blind `[:40_000]` research truncation, no market blinding, no resolution-source fetch or gap-fill, no longitudinal updating |
+| *(Reserved: Competitor 03)* | *Pending next analysis* | — | — | — | — | — |
 
 ---
 
@@ -119,3 +120,36 @@ Instead, **fold six high-ROI upgrades incrementally into `Plan v2.1` and `M1`** 
    * Keep `red_team_audit.tmpl` **binding** (never advisory-only), add a `load_bearing_claims` primary-source **VERIFY** check even when ensemble spread is low, and require **multi-era sign stability** before enabling `enable_ridge_platt_extremize`.
 6. **Upgrade Rust Test Harness Discipline (`M1+`):**
    * Enforce an explicit offline network-egress guard in `M1` HTTP transport tests, build clean trait-based `*_fakes` modules, and track branch coverage on fail-shut/fallback arms.
+
+---
+
+## Competitor 02 · `Schokolade12138/metac-bot-template` (`sakuraqkl`)
+
+* **Repository Diff:** `https://github.com/Metaculus/metac-bot-template/compare/main...Schokolade12138:metac-bot-template:main` (`4` commits, `16` files, `+1,450` LOC over `Metaculus/metac-bot-template`)
+* **Scale:** Minimal, clean single-bot fork (`bot/{forecaster,free_research,guards,settings}.py`, `run_bot.py`, `3` `unittest` files totaling `282` LOC).
+* **Competitions Targeted:** **Metaculus FutureEval + MiniBench** (combined in one `--mode tournament` pass) and `bot-testing-area` smoke tests (`--mode test_questions`). Does **not** target Mantic Crucible, Metaculus Cup (kept manual/unscheduled), or ForecastBench.
+
+### 1. Clever Lightweight Ideas Worth Extracting
+
+1. **Zero-Key Free-Research Layer (`bot/free_research.py`):**
+   * Combines **Google News RSS** (`https://news.google.com/rss/search?q=<query>+when:30d`) with public **Polymarket** (`gamma-api.polymarket.com/public-search`, filtered to `volume >= \$5,000` active events) and **Manifold** (`api.manifold.markets/v0/search-markets`, filtered to `uniqueBettorCount >= 8` open markets)—requiring **zero API keys**.
+   * Uses a tiny model to generate 3 news + 2 market keyword queries with a **deterministic zero-LLM keyword fallback (`fallback_queries`)**.
+   * *Adoption in `fcast`:* Ideal for `M1` `Harvester`'s zero-key `fcast sync` (`GATE-24`) and as an automatic `\$0` fallback when AskNews/Perplexity/Exa quotas are exhausted—while keeping Polymarket/Manifold prices strictly quarantined behind `MarketBlindingScrubber` pre-seal (`INV-04`).
+2. **Exact Fixed-Point Multiple-Choice Simplex Flooring (`bot/guards.py::floor_option_probabilities`):**
+   * Raising low options to `floor = 0.01` and rescaling the remaining options proportionally can push another option below `floor`; their `while True` fixed-point loop iterates until the floored set stabilizes, guaranteeing exact sum-to-1 and `p_i >= floor` for all options.
+   * *Adoption in `fcast`:* Add directly to `fcast-core::coherence` (`<= 25` LOC + `10,000`-case `proptest`).
+3. **Graceful Two-Tier Credit Auto-Degradation & Free-Profile Tournament Guard (`bot/settings.py`):**
+   * Checks remaining OpenRouter credits (`/api/v1/key`) before forecasting: below **`\$8.00`** (`LOW_CREDIT_USD`), automatically swaps to cheap models and disables paid web search; below **`\$0.50`** (`MIN_CREDIT_USD`), halts forecasting cleanly.
+   * **`free` Profile Safety Rail:** In `--mode tournament`, the `free` profile *only lists open questions* and refuses to publish weak free-model predictions into prize tournaments (preventing accidental leaderboard poisoning during setup).
+   * *Adoption in `fcast`:* Add a `low_credit_degrade_usd` tier to `daemon_budget_ledger` / `LlmRouter` so `fcast` gracefully downgrades to Tier-0 + cheap models instead of hard-stopping mid-tournament.
+4. **Cross-Vendor Failover Retry (`bot/forecaster.py::_guarded`):**
+   * On forecast failure, retries on the **next vendor in the cycle** rather than hammering the same failing/rate-limited model.
+5. **Type-Stratified Smoke Test Sampling (`run_bot.py::pick_test_questions`) & `check_setup.yaml`:**
+   * Round-robins `bot-testing-area` questions by question type so a 4-question smoke test covers `Binary`, `MultipleChoice`, `Numeric`, and `Date` together; `check_setup.yaml` verifies secret presence without leaking values.
+
+### 2. Where `Schokolade12138` Falls Short (Pitfalls to Avoid)
+
+1. **Silent Exit-`0` Crash Swallowing (`run_bot.py:213-223`):** Catches `BaseException` and returns exit code `0` to avoid GitHub failure emails—meaning broken tokens, API changes, or parser regressions can fail silently for weeks. (`nostreambot`'s alertable exit ladder + `fcast`'s `DEAD_LETTER` HUD badge are far safer.)
+2. **Zero Numeric/Date Safeguards & Blind Research Truncation:** Clamps binary `[0.02, 0.98]` and floors MC `>= 0.01`, but applies **no guards** on numeric/date distributions (no PCHIP, no discrete snap, no Mantic tail floor, no extraction fidelity ladder), and truncates combined research via a blind `[:40_000]` character slice that can chop mid-market or mid-sentence.
+3. **No Market Blinding, No Resolution-Source Fetching, No Gap-Fill, No Fail-Shut Re-Spend Guard:** Injects Polymarket/Manifold prices straight into the prompt pre-seal, relies only on headlines + one web-search summary, and filters `not q.already_forecasted` without failing shut if `my_forecasts` is missing.
+4. **Single-Shot Only & Minimal Test Coverage:** `3` small `unittest` files (`282` LOC), no network-egress guard, no longitudinal revision tracking, and no calibration/residual postmortem tooling.
