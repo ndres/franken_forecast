@@ -32,7 +32,32 @@ pub fn build_metaculus_cdf(
     if !lower_bound.is_finite() || !upper_bound.is_finite() || upper_bound <= lower_bound {
         return Err(CoherenceError::InvalidBounds(lower_bound, upper_bound));
     }
-    let n = inbound_outcome_count.map_or(201, |c| c + 1);
+    if !min_step.is_finite()
+        || !max_step.is_finite()
+        || min_step < 0.0
+        || max_step <= 0.0
+        || min_step > max_step
+    {
+        return Err(CoherenceError::InvalidBounds(min_step, max_step));
+    }
+    if let Some(z) = zero_point
+        && (!z.is_finite() || z >= lower_bound)
+    {
+        return Err(CoherenceError::InvalidBounds(z, lower_bound));
+    }
+    if percentiles.iter().any(|&(v, p)| {
+        !v.is_finite()
+            || !p.is_finite()
+            || !(0.0..=1.0).contains(&p)
+            || zero_point.is_some_and(|z| v <= z)
+    }) {
+        return Err(CoherenceError::InvalidBounds(lower_bound, upper_bound));
+    }
+    let n = match inbound_outcome_count {
+        Some(0) => return Err(CoherenceError::InvalidBounds(0.0, upper_bound)),
+        Some(c) => c + 1,
+        None => 201,
+    };
 
     let to_unit = |x: f64| -> f64 {
         if let Some(z) = zero_point {
@@ -225,6 +250,50 @@ mod tests {
         )
         .expect("disc");
         assert_eq!(disc.len(), 16);
+
+        // Adversarial inputs: invalid zero_point, zero outcome count, NaN percentiles
+        assert!(
+            build_metaculus_cdf(
+                &[(50.0, 0.5)],
+                0.0,
+                100.0,
+                false,
+                false,
+                Some(0.0),
+                None,
+                5e-5,
+                0.59
+            )
+            .is_err()
+        );
+        assert!(
+            build_metaculus_cdf(
+                &[(50.0, 0.5)],
+                0.0,
+                100.0,
+                false,
+                false,
+                None,
+                Some(0),
+                5e-5,
+                0.59
+            )
+            .is_err()
+        );
+        assert!(
+            build_metaculus_cdf(
+                &[(f64::NAN, 0.5)],
+                0.0,
+                100.0,
+                false,
+                false,
+                None,
+                None,
+                5e-5,
+                0.59
+            )
+            .is_err()
+        );
     }
 
     #[test]

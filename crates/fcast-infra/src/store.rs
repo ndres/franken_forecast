@@ -1,5 +1,6 @@
 //! `Chronicle` `OperationalStore` over `fsqlite::blocking` WAL/MVCC (`§7`, `§13.2`, `§18`).
 
+use crate::vault::VaultedArtifact;
 use fcast_core::forecast::{
     ForecastRevision, OutcomeDistribution, ProbClamped, ResolutionStatusAtCutoff,
 };
@@ -147,7 +148,8 @@ impl OperationalStore {
         if !status.eq_ignore_ascii_case("ok") {
             return Err(StoreError::IntegrityFailed(status));
         }
-        let _ = self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         let raw = fs::read(&self.db_path)?;
         let compressed = zstd::bulk::compress(&raw, 9)?;
         let backup_path = backup_path.as_ref().to_path_buf();
@@ -374,7 +376,13 @@ impl OperationalStore {
     }
 
     /// Checks daily spend circuit breaker (`$5.00/day` default cap) before metered job dispatch.
+    /// Fail-closed on non-finite or negative `est_usd` estimates.
     pub fn check_budget_available(&self, utc_day: &str, est_usd: f64) -> Result<(), StoreError> {
+        if !est_usd.is_finite() || est_usd < 0.0 {
+            return Err(StoreError::IntegrityFailed(format!(
+                "invalid estimated job cost: {est_usd}"
+            )));
+        }
         let row: Option<(f64, f64)> = self
             .conn
             .query_row(
@@ -384,7 +392,7 @@ impl OperationalStore {
             )
             .optional()?;
         let (spent_usd, cap_usd) = row.unwrap_or((0.0, 5.0));
-        if spent_usd + est_usd > cap_usd {
+        if !spent_usd.is_finite() || !cap_usd.is_finite() || spent_usd + est_usd > cap_usd {
             return Err(StoreError::BudgetCapExceeded {
                 spent_usd,
                 est_usd,
@@ -463,6 +471,69 @@ impl OperationalStore {
         Ok(row.map(|(ver, p_indep, shift)| (ver, p_indep, shift.unwrap_or(0.0))))
     }
 
+    /// Idempotently inserts a question record (`INSERT OR IGNORE`).
+    pub fn upsert_question_if_absent(
+        &self,
+        question_id: &str,
+        venue: &str,
+        title: &str,
+        contract_sha256: &str,
+        horizon_geometry: &str,
+        created_utc: &str,
+    ) -> Result<(), StoreError> {
+        parse_rfc3339_epoch_ms(created_utc)?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO questions (question_id, venue, title, contract_sha256, horizon_geometry, created_utc)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                question_id,
+                venue,
+                title,
+                contract_sha256,
+                horizon_geometry,
+                created_utc
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Idempotently registers a vaulted blob in `evidence_vault_index` with validated RFC-3339 `available_utc`.
+    pub fn index_vault_artifact(
+        &self,
+        art: &VaultedArtifact,
+        available_utc: &str,
+    ) -> Result<(), StoreError> {
+        parse_rfc3339_epoch_ms(available_utc)?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO evidence_vault_index (ev_handle, sha256_hex, span_id, available_utc, byte_len, zstd_compressed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                art.ev_handle.as_str(),
+                &art.sha256_hex,
+                &art.span_id,
+                available_utc,
+                art.byte_len as i64,
+                i64::from(art.zstd_compressed),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Idempotently ensures a `forecast_streams` row exists for `(forecast_id, question_id)`.
+    pub fn ensure_forecast_stream(
+        &self,
+        forecast_id: &str,
+        question_id: &str,
+        stream_kind: &str,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO forecast_streams (forecast_id, question_id, stream_kind, origin_revision_id)
+             VALUES (?1, ?2, ?3, NULL)",
+            params![forecast_id, question_id, stream_kind],
+        )?;
+        Ok(())
+    }
+
     /// Persists an append-only immutable `TuningCacheSnapshot` (`0005_tuning_cache_snapshots.sql`).
     /// `RepRouter(t)` reads only pre-committed snapshots `(t-1)`, decoupling `FR4` from live `Crucible` (`DP8`).
     pub fn save_tuning_snapshot(
@@ -479,6 +550,24 @@ impl OperationalStore {
             params![snapshot_id, created_utc, resolved_n as i64, payload_json],
         )?;
         Ok(())
+    }
+
+    /// Idempotent variant of [`Self::save_tuning_snapshot`] (`INSERT OR IGNORE`) that preserves
+    /// immutability while propagating real database errors instead of swallowing them.
+    pub fn ensure_tuning_snapshot_idempotent(
+        &self,
+        snapshot_id: &str,
+        created_utc: &str,
+        resolved_n: usize,
+        payload_json: &str,
+    ) -> Result<bool, StoreError> {
+        parse_rfc3339_epoch_ms(created_utc)?;
+        let inserted = self.conn.execute(
+            "INSERT OR IGNORE INTO rep_router_tuning_snapshots (snapshot_id, created_utc, resolved_n, payload_json)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![snapshot_id, created_utc, resolved_n as i64, payload_json],
+        )?;
+        Ok(inserted > 0)
     }
 
     /// Loads the latest immutable `TuningCacheSnapshot` as `(snapshot_id, created_utc, resolved_n, payload_json)`.
@@ -506,80 +595,6 @@ impl OperationalStore {
 
 /// Parses an RFC3339 timestamp (`YYYY-MM-DDTHH:MM:SS[.fff][Z|±HH:MM]`) into exact UTC epoch milliseconds.
 pub fn parse_rfc3339_epoch_ms(s: &str) -> Result<i64, StoreError> {
-    let b = s.as_bytes();
-    if b.len() < 20
-        || b[4] != b'-'
-        || b[7] != b'-'
-        || (b[10] != b'T' && b[10] != b't')
-        || b[13] != b':'
-        || b[16] != b':'
-    {
-        return Err(StoreError::InvalidTimestamp(s.to_owned()));
-    }
-    let parse_u = |lo: usize, hi: usize| -> Result<i64, StoreError> {
-        s[lo..hi]
-            .parse::<i64>()
-            .map_err(|_| StoreError::InvalidTimestamp(s.to_owned()))
-    };
-    let year = parse_u(0, 4)?;
-    let month = parse_u(5, 7)?;
-    let day = parse_u(8, 10)?;
-    let hour = parse_u(11, 13)?;
-    let minute = parse_u(14, 16)?;
-    let second = parse_u(17, 19)?;
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || !(0..=23).contains(&hour)
-        || !(0..=59).contains(&minute)
-        || !(0..=60).contains(&second)
-    {
-        return Err(StoreError::InvalidTimestamp(s.to_owned()));
-    }
-
-    let mut idx = 19;
-    let mut millis = 0_i64;
-    if idx < b.len() && b[idx] == b'.' {
-        idx += 1;
-        let frac_start = idx;
-        while idx < b.len() && b[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        let frac = &s[frac_start..idx];
-        if frac.is_empty() {
-            return Err(StoreError::InvalidTimestamp(s.to_owned()));
-        }
-        let mut scale = 100_i64;
-        for ch in frac.bytes().take(3) {
-            millis += i64::from(ch - b'0') * scale;
-            scale /= 10;
-        }
-    }
-
-    let offset_sec: i64 = if idx < b.len() && (b[idx] == b'Z' || b[idx] == b'z') {
-        idx += 1;
-        0
-    } else if idx + 6 == b.len() && (b[idx] == b'+' || b[idx] == b'-') && b[idx + 3] == b':' {
-        let sign = if b[idx] == b'+' { 1 } else { -1 };
-        let oh = parse_u(idx + 1, idx + 3)?;
-        let om = parse_u(idx + 4, idx + 6)?;
-        idx += 6;
-        sign * (oh * 3600 + om * 60)
-    } else {
-        return Err(StoreError::InvalidTimestamp(s.to_owned()));
-    };
-    if idx != b.len() {
-        return Err(StoreError::InvalidTimestamp(s.to_owned()));
-    }
-
-    // Howard Hinnant civil-to-days algorithm (UTC days since 1970-01-01).
-    let y = year - i64::from(month <= 2);
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let m_adj = if month > 2 { month - 3 } else { month + 9 };
-    let doy = (153 * m_adj + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-
-    let total_sec = days * 86_400 + hour * 3_600 + minute * 60 + second - offset_sec;
-    Ok(total_sec * 1_000 + millis)
+    fcast_core::time::parse_rfc3339_epoch_ms(s)
+        .map_err(|_| StoreError::InvalidTimestamp(s.to_owned()))
 }

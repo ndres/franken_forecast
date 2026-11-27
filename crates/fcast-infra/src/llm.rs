@@ -308,10 +308,14 @@ impl GeminiCliClient {
         body_json: Option<&serde_json::Value>,
         dry_run: bool,
     ) -> Result<GeminiAgentRun, GeminiCliError> {
+        if agent_id.is_empty() || agent_id.starts_with('-') {
+            return Err(GeminiCliError::UsageValidation {
+                stderr: format!("invalid agent_id: {agent_id:?}"),
+            });
+        }
         let mut args = vec![
             "agent".to_owned(),
             "run".to_owned(),
-            prompt.to_owned(),
             "--agent".to_owned(),
             agent_id.to_owned(),
             "--background".to_owned(),
@@ -327,6 +331,8 @@ impl GeminiCliClient {
             args.push("--dry-run".to_owned());
         }
         self.push_global_flags(&mut args);
+        args.push("--".to_owned());
+        args.push(prompt.to_owned());
         let raw = self.run_json(&args, None)?;
         let id = raw
             .get("id")
@@ -351,15 +357,21 @@ impl GeminiCliClient {
 
     /// Polls a managed agent run via `gemini-api agent status <run_id> -o json`.
     pub fn agent_status(&self, run_id: &str) -> Result<GeminiGenerateResponse, GeminiCliError> {
+        if run_id.is_empty() || run_id.starts_with('-') || run_id.chars().any(char::is_whitespace) {
+            return Err(GeminiCliError::UsageValidation {
+                stderr: format!("invalid run_id: {run_id:?}"),
+            });
+        }
         let mut args = vec![
             "agent".to_owned(),
             "status".to_owned(),
-            run_id.to_owned(),
             "--no-interactive".to_owned(),
             "-o".to_owned(),
             "json".to_owned(),
         ];
         self.push_global_flags(&mut args);
+        args.push("--".to_owned());
+        args.push(run_id.to_owned());
         let raw = self.run_json(&args, None)?;
         Ok(parse_generate_response("agent", raw))
     }
@@ -422,13 +434,29 @@ impl GeminiCliClient {
             }
         })?;
 
-        if let Some(bytes) = stdin_bytes
-            && let Some(mut stdin) = child.stdin.take()
-        {
-            stdin.write_all(bytes)?;
-        }
-
-        let output = child.wait_with_output()?;
+        // Stream stdin on a scoped thread while draining stdout/stderr so large prompts never
+        // deadlock OS pipe buffers and early child exits (e.g., auth failure -> EPIPE) still
+        // surface their structured stderr & exit code.
+        let output = std::thread::scope(|scope| -> Result<std::process::Output, std::io::Error> {
+            let writer_handle = match (stdin_bytes, child.stdin.take()) {
+                (Some(bytes), Some(mut stdin)) => Some(scope.spawn(move || {
+                    if let Err(e) = stdin.write_all(bytes)
+                        && e.kind() != std::io::ErrorKind::BrokenPipe
+                    {
+                        return Err(e);
+                    }
+                    Ok(())
+                })),
+                _ => None,
+            };
+            let output = child.wait_with_output()?;
+            if let Some(handle) = writer_handle
+                && let Ok(write_res) = handle.join()
+            {
+                write_res?;
+            }
+            Ok(output)
+        })?;
         if !output.status.success() {
             let code = output.status.code().unwrap_or(1);
             let stderr = scrub_secrets(&String::from_utf8_lossy(&output.stderr))
@@ -518,5 +546,27 @@ fn parse_generate_response(default_model: &str, raw: serde_json::Value) -> Gemin
         text,
         dry_run,
         raw_json: raw,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_flag_injection_in_agent_ids_and_run_ids() {
+        let client = GeminiCliClient::from_env();
+        assert!(matches!(
+            client.agent_status("--help"),
+            Err(GeminiCliError::UsageValidation { .. })
+        ));
+        assert!(matches!(
+            client.agent_status("id with spaces"),
+            Err(GeminiCliError::UsageValidation { .. })
+        ));
+        assert!(matches!(
+            client.agent_run_background("--evil", "hello", None, true),
+            Err(GeminiCliError::UsageValidation { .. })
+        ));
     }
 }

@@ -69,8 +69,32 @@ impl<'a> DurableJobStore<'a> {
         Self { store }
     }
 
+    fn run_immediate_tx<T>(
+        &self,
+        f: impl FnOnce() -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let conn = self.store.connection();
+        conn.execute_batch("BEGIN IMMEDIATE;")?;
+        match f() {
+            Ok(v) => {
+                conn.execute_batch("COMMIT;")?;
+                Ok(v)
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK;");
+                Err(e)
+            }
+        }
+    }
+
     /// Enqueues a job idempotently using `BLAKE3(idempotency_seed)`; returns `true` if newly inserted.
     pub fn enqueue_idempotent(&self, spec: &JobSpec) -> Result<(String, bool), StoreError> {
+        if !spec.est_cost_usd.is_finite() || spec.est_cost_usd < 0.0 {
+            return Err(StoreError::IntegrityFailed(format!(
+                "invalid job est_cost_usd: {}",
+                spec.est_cost_usd
+            )));
+        }
         let idem_hash = blake3::hash(spec.idempotency_seed.as_bytes())
             .to_hex()
             .to_string();
@@ -93,68 +117,75 @@ impl<'a> DurableJobStore<'a> {
         Ok((job_id, changed > 0))
     }
 
-    /// Dequeues the highest-priority `QUEUED` job (`priority_tier DESC, deadline_utc ASC, voi_log DESC`)
-    /// and acquires a crash-recoverable visibility lease.
+    /// Atomically dequeues the highest-priority `QUEUED` job (`priority_tier DESC, deadline_utc ASC, voi_log DESC`)
+    /// inside a `BEGIN IMMEDIATE` write transaction and acquires a crash-recoverable visibility lease.
     pub fn dequeue_next(
         &self,
         utc_day: &str,
         lease_expires_epoch: i64,
     ) -> Result<Option<QueuedJob>, StoreError> {
-        type RowTuple = (String, String, String, i64, String, f64, i64, f64);
-        let row: Option<RowTuple> = self
-            .store
-            .connection()
-            .query_row(
-                "SELECT job_id, kind, lane, priority_tier, deadline_utc, voi_log, attempts, est_cost_usd
-                 FROM fcast_jobs
-                 WHERE state = 'QUEUED'
-                 ORDER BY priority_tier DESC, deadline_utc ASC, voi_log DESC
-                 LIMIT 1",
-                [],
-                |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                        r.get(6)?,
-                        r.get(7)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let Some((
-            job_id,
-            kind,
-            lane,
-            priority_tier,
-            deadline_utc,
-            voi_log,
-            attempts,
-            est_cost_usd,
-        )) = row
-        else {
-            return Ok(None);
-        };
-        if est_cost_usd > 0.0 {
-            self.store.check_budget_available(utc_day, est_cost_usd)?;
-        }
-        self.store.connection().execute(
-            "UPDATE fcast_jobs SET state = 'RUNNING', lease_expires_epoch = ?1 WHERE job_id = ?2",
-            params![lease_expires_epoch, &job_id],
-        )?;
-        Ok(Some(QueuedJob {
-            job_id,
-            kind,
-            lane,
-            priority_tier,
-            deadline_utc,
-            voi_log,
-            attempts,
-            est_cost_usd,
-        }))
+        self.run_immediate_tx(|| {
+            type RowTuple = (String, String, String, i64, String, f64, i64, f64);
+            let row: Option<RowTuple> = self
+                .store
+                .connection()
+                .query_row(
+                    "SELECT job_id, kind, lane, priority_tier, deadline_utc, voi_log, attempts, est_cost_usd
+                     FROM fcast_jobs
+                     WHERE state = 'QUEUED'
+                     ORDER BY priority_tier DESC, deadline_utc ASC, voi_log DESC
+                     LIMIT 1",
+                    [],
+                    |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get(5)?,
+                            r.get(6)?,
+                            r.get(7)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((
+                job_id,
+                kind,
+                lane,
+                priority_tier,
+                deadline_utc,
+                voi_log,
+                attempts,
+                est_cost_usd,
+            )) = row
+            else {
+                return Ok(None);
+            };
+            if est_cost_usd > 0.0 {
+                self.store.check_budget_available(utc_day, est_cost_usd)?;
+            }
+            let updated = self.store.connection().execute(
+                "UPDATE fcast_jobs
+                 SET state = 'RUNNING', lease_expires_epoch = ?1
+                 WHERE job_id = ?2 AND state = 'QUEUED'",
+                params![lease_expires_epoch, &job_id],
+            )?;
+            if updated == 0 {
+                return Ok(None);
+            }
+            Ok(Some(QueuedJob {
+                job_id,
+                kind,
+                lane,
+                priority_tier,
+                deadline_utc,
+                voi_log,
+                attempts,
+                est_cost_usd,
+            }))
+        })
     }
 
     /// Reclaims stale `RUNNING` visibility leases after `SIGKILL` / daemon crash (`GATE-19`).
@@ -168,27 +199,29 @@ impl<'a> DurableJobStore<'a> {
         Ok(n)
     }
 
-    /// Records a job failure; quarantines into `DEAD_LETTER` once `attempts >= MAX_JOB_ATTEMPTS` (`§13.2`).
+    /// Atomically records a job failure; quarantines into `DEAD_LETTER` once `attempts >= MAX_JOB_ATTEMPTS` (`§13.2`).
     pub fn record_failure(&self, job_id: &str, err_msg: &str) -> Result<String, StoreError> {
-        let attempts: i64 = self.store.connection().query_row(
-            "SELECT attempts FROM fcast_jobs WHERE job_id = ?1",
-            params![job_id],
-            |r| r.get(0),
-        )?;
-        let next_attempts = attempts + 1;
-        let next_state = if next_attempts >= MAX_JOB_ATTEMPTS {
-            "DEAD_LETTER"
-        } else {
-            "QUEUED"
-        };
         let sanitized_err = crate::daemon::scrub_secrets(err_msg);
-        self.store.connection().execute(
-            "UPDATE fcast_jobs
-             SET attempts = ?1, state = ?2, lease_expires_epoch = NULL, last_error = ?3
-             WHERE job_id = ?4",
-            params![next_attempts, next_state, &sanitized_err, job_id],
-        )?;
-        Ok(next_state.to_owned())
+        self.run_immediate_tx(|| {
+            let attempts: i64 = self.store.connection().query_row(
+                "SELECT attempts FROM fcast_jobs WHERE job_id = ?1",
+                params![job_id],
+                |r| r.get(0),
+            )?;
+            let next_attempts = attempts + 1;
+            let next_state = if next_attempts >= MAX_JOB_ATTEMPTS {
+                "DEAD_LETTER"
+            } else {
+                "QUEUED"
+            };
+            self.store.connection().execute(
+                "UPDATE fcast_jobs
+                 SET attempts = ?1, state = ?2, lease_expires_epoch = NULL, last_error = ?3
+                 WHERE job_id = ?4",
+                params![next_attempts, next_state, &sanitized_err, job_id],
+            )?;
+            Ok(next_state.to_owned())
+        })
     }
 
     /// Publishes a coalesced domain event (`INSERT OR IGNORE` on `idempotency_key`, `§13.2`).
@@ -299,7 +332,7 @@ impl<'a> DurableJobStore<'a> {
         self.poll_domain_events(last_acked)
     }
 
-    /// Monotonically advances `event_consumers.last_acked_event_seq` for `consumer_id`
+    /// Atomically and monotonically advances `event_consumers.last_acked_event_seq` for `consumer_id`
     /// and returns the effective persisted cursor sequence (`§13.2`).
     pub fn ack_consumer_cursor(
         &self,
@@ -307,38 +340,40 @@ impl<'a> DurableJobStore<'a> {
         event_seq: i64,
         updated_utc: &str,
     ) -> Result<i64, StoreError> {
-        let existing: Option<i64> = self
-            .store
-            .connection()
-            .query_row(
-                "SELECT last_acked_event_seq FROM event_consumers WHERE consumer_id = ?1",
-                params![consumer_id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        match existing {
-            None => {
-                let effective = event_seq.max(0);
-                self.store.connection().execute(
-                    "INSERT INTO event_consumers (consumer_id, last_acked_event_seq, updated_utc)
-                     VALUES (?1, ?2, ?3)",
-                    params![consumer_id, effective, updated_utc],
-                )?;
-                Ok(effective)
-            }
-            Some(current) => {
-                let effective = current.max(event_seq);
-                if effective > current {
+        self.run_immediate_tx(|| {
+            let existing: Option<i64> = self
+                .store
+                .connection()
+                .query_row(
+                    "SELECT last_acked_event_seq FROM event_consumers WHERE consumer_id = ?1",
+                    params![consumer_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match existing {
+                None => {
+                    let effective = event_seq.max(0);
                     self.store.connection().execute(
-                        "UPDATE event_consumers
-                         SET last_acked_event_seq = ?1, updated_utc = ?2
-                         WHERE consumer_id = ?3",
-                        params![effective, updated_utc, consumer_id],
+                        "INSERT INTO event_consumers (consumer_id, last_acked_event_seq, updated_utc)
+                         VALUES (?1, ?2, ?3)",
+                        params![consumer_id, effective, updated_utc],
                     )?;
+                    Ok(effective)
                 }
-                Ok(effective)
+                Some(current) => {
+                    let effective = current.max(event_seq);
+                    if effective > current {
+                        self.store.connection().execute(
+                            "UPDATE event_consumers
+                             SET last_acked_event_seq = ?1, updated_utc = ?2
+                             WHERE consumer_id = ?3",
+                            params![effective, updated_utc, consumer_id],
+                        )?;
+                    }
+                    Ok(effective)
+                }
             }
-        }
+        })
     }
 
     /// Axiomatic Split 4 (`FR7 -> FR2 t+1`): evaluates `KalmanBlendResult::mean_shift_surprise_nats`

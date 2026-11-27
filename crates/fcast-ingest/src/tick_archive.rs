@@ -211,26 +211,35 @@ impl TickArchive {
         Ok(keys)
     }
 
-    /// Read all ticks for `venue`, optionally enforcing `timestamp_utc <= as_of_utc` (`INV-03`).
+    /// Read all ticks for `venue`, optionally enforcing exact epoch-ms `timestamp_utc <= as_of_utc` (`INV-03`).
     pub fn read_venue_as_of(
         &self,
         venue: &str,
         as_of_utc: Option<&str>,
     ) -> Result<Vec<L2TickRecord>, TickArchiveError> {
         validate_venue(venue)?;
-        let mut out = Vec::new();
+        let cutoff_ms = match as_of_utc {
+            Some(cutoff) => Some(
+                fcast_core::time::parse_utc_epoch_ms(cutoff)
+                    .map_err(|_| TickArchiveError::InvalidTimestamp(cutoff.to_owned()))?,
+            ),
+            None => None,
+        };
+        let mut keyed: Vec<(i64, L2TickRecord)> = Vec::new();
         for key in self.list_partitions()? {
             if key.venue != venue {
                 continue;
             }
             for rec in self.read_partition(&key)? {
-                if as_of_utc.is_none_or(|cutoff| rec.timestamp_utc.as_str() <= cutoff) {
-                    out.push(rec);
+                let ts_ms = fcast_core::time::parse_utc_epoch_ms(&rec.timestamp_utc)
+                    .map_err(|_| TickArchiveError::InvalidTimestamp(rec.timestamp_utc.clone()))?;
+                if cutoff_ms.is_none_or(|c| ts_ms <= c) {
+                    keyed.push((ts_ms, rec));
                 }
             }
         }
-        out.sort_by(|a, b| a.timestamp_utc.cmp(&b.timestamp_utc));
-        Ok(out)
+        keyed.sort_by_key(|(ts_ms, _)| *ts_ms);
+        Ok(keyed.into_iter().map(|(_, rec)| rec).collect())
     }
 }
 
@@ -327,11 +336,29 @@ mod tests {
         assert_eq!(poly_all[0], batch1[0]);
         assert_eq!(poly_all[1], batch2[0]);
 
-        // INV-03 as_of_utc cutoff excludes the later tick
+        // INV-03 as_of_utc cutoff excludes the later tick AND enforces epoch-ms ordering (not ASCII 'Z' > '.')
         let poly_cutoff = archive
             .read_venue_as_of("polymarket", Some("2026-11-25T23:59:59Z"))
             .expect("as_of");
         assert_eq!(poly_cutoff.len(), 1);
         assert_eq!(poly_cutoff[0], batch1[0]);
+
+        let frac_tick = vec![L2TickRecord {
+            venue: "polymarket".into(),
+            question_id: "q_baltic".into(),
+            timestamp_utc: "2026-11-25T23:59:59.500Z".into(),
+            bid_price: 0.41,
+            bid_size_usd: 3000.0,
+            ask_price: 0.42,
+            ask_size_usd: 2500.0,
+            last_trade: Some(0.415),
+            depth_impact_500_prob: 0.005,
+            s_tick_bps: 100.0,
+        }];
+        archive.write_ticks(&frac_tick).expect("write frac");
+        let strict_cutoff = archive
+            .read_venue_as_of("polymarket", Some("2026-11-25T23:59:59Z"))
+            .expect("strict as_of");
+        assert_eq!(strict_cutoff.len(), 1);
     }
 }

@@ -8,6 +8,7 @@ pub mod belief;
 pub mod blinding;
 pub mod coherence;
 pub mod forecast;
+pub mod time;
 
 /// Canonical numerical clamp epsilon (`1e-6`, `§7.1` & `lean_experiments/Claim05Spec.lean`).
 pub const PROB_EPS: f64 = 1e-6;

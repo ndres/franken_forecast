@@ -171,10 +171,25 @@ impl AttributionWaterfall {
     }
 
     pub fn apply_and_verify(&self, p_prev: ProbClamped) -> Result<ProbClamped, ForecastError> {
+        for component in [
+            self.decay,
+            self.stream,
+            self.fold,
+            self.red_team,
+            self.kalman,
+        ] {
+            if !component.is_finite() {
+                return Err(ForecastError::InvalidProbability(component));
+            }
+        }
+        let delta = self.total_delta_logit();
+        if !delta.is_finite() {
+            return Err(ForecastError::InvalidProbability(delta));
+        }
         let th_prev = p_prev.logit();
-        let th_next = th_prev + self.total_delta_logit();
+        let th_next = th_prev + delta;
         let p_next = ProbClamped::clamp_lossy(sigmoid(th_next));
-        let residual = ((p_next.logit() - th_prev) - self.total_delta_logit()).abs();
+        let residual = ((p_next.logit() - th_prev) - delta).abs();
         if th_next.abs() < 12.0 && residual > 1e-10 {
             return Err(ForecastError::WaterfallResidual(residual));
         }
@@ -319,5 +334,18 @@ mod tests {
             .apply_and_verify(ProbClamped::new(0.134).expect("prob"))
             .expect("exact waterfall");
         assert!(p_next.get() > 0.16 && p_next.get() < 0.18);
+
+        let nan_wf = AttributionWaterfall {
+            decay: f64::NAN,
+            stream: 0.0,
+            fold: 0.0,
+            red_team: 0.0,
+            kalman: 0.0,
+        };
+        assert!(
+            nan_wf
+                .apply_and_verify(ProbClamped::new(0.50).expect("prob"))
+                .is_err()
+        );
     }
 }

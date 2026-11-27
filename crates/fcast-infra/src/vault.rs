@@ -14,6 +14,8 @@ pub enum VaultError {
     Io(#[from] std::io::Error),
     #[error("evidence handle error: {0}")]
     Handle(#[from] fcast_core::blinding::BlindingError),
+    #[error("invalid SHA-256 hex digest: {0:?}")]
+    InvalidDigest(String),
     #[error("SHA-256 integrity mismatch for {handle}: expected {expected}, got {actual}")]
     IntegrityMismatch {
         handle: String,
@@ -81,6 +83,13 @@ impl EvidenceVault {
         sha256_hex: &str,
         zstd_compressed: bool,
     ) -> Result<Vec<u8>, VaultError> {
+        if sha256_hex.len() != 64
+            || !sha256_hex
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(VaultError::InvalidDigest(sha256_hex.to_owned()));
+        }
         let shard = &sha256_hex[0..2];
         let ext = if zstd_compressed { "blob.zst" } else { "blob" };
         let blob_path = self.root.join(shard).join(format!("{sha256_hex}.{ext}"));
@@ -127,5 +136,23 @@ mod tests {
             vault.read_verified(&a2.sha256_hex, true).expect("read"),
             big
         );
+
+        // Reject path traversal, short strings, non-ASCII, and uppercase digests without panicking
+        for bad in [
+            "",
+            "a",
+            "é",
+            "../../etc/passwd",
+            "aa/../../secret",
+            &"A".repeat(64),
+        ] {
+            assert!(
+                matches!(
+                    vault.read_verified(bad, false),
+                    Err(VaultError::InvalidDigest(_))
+                ),
+                "expected InvalidDigest for {bad:?}"
+            );
+        }
     }
 }

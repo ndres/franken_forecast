@@ -3,7 +3,7 @@
 //! anti-selection-bias scorecard, and `M1.5` end-to-end demo runner.
 
 use crate::cohort::{BenchmarkOutcome, ResolvedBenchmarkQuestion};
-use fcast_core::blinding::{MarketBlindingScrubber, VerifiedEvidenceRef};
+use fcast_core::blinding::MarketBlindingScrubber;
 use fcast_core::forecast::{
     OutcomeDistribution, ProbClamped, ResolutionStatusAtCutoff, UnsealedForecastRevision,
 };
@@ -18,7 +18,7 @@ use fcast_infra::vault::{EvidenceVault, VaultError};
 use fcast_ingest::{
     BookMarkPrice, DomainDecision, IntakeSnapshot, OrderbookSnapshot, assemble_evidence_bundle,
 };
-use fsqlite::blocking::{OptionalExtension, params};
+use fsqlite::blocking::params;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -234,15 +234,26 @@ pub fn evaluate_arm_from_store(
             }
         };
 
-        // Join disjoint question_resolutions table (never mutating forecast_revisions!)
-        let res_row: Option<(String, Option<String>)> = conn
-            .query_row(
-                "SELECT final_status, outcome_payload_json FROM question_resolutions
-                 WHERE question_id = ?1 ORDER BY recorded_available_utc DESC LIMIT 1",
-                params![&q.question_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
+        // Join disjoint question_resolutions table using exact epoch-ms ordering (never mutating forecast_revisions!)
+        let mut res_stmt = conn.prepare(
+            "SELECT final_status, outcome_payload_json, recorded_available_utc
+             FROM question_resolutions
+             WHERE question_id = ?1",
+        )?;
+        let res_rows: Vec<(String, Option<String>, String)> = res_stmt
+            .query_map(params![&q.question_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let res_row: Option<(String, Option<String>)> = res_rows
+            .into_iter()
+            .filter_map(|(st, payload, ts)| {
+                fcast_core::time::parse_utc_epoch_ms(&ts)
+                    .ok()
+                    .map(|ms| (ms, st, payload))
+            })
+            .max_by_key(|(ms, _, _)| *ms)
+            .map(|(_, st, payload)| (st, payload));
 
         let Some((final_status, payload_opt)) = res_row else {
             continue;
@@ -333,25 +344,28 @@ pub fn run_m15_demo_pipeline(
 ) -> Result<M15DemoReport, BenchError> {
     let conn = store.connection();
 
-    // 1. Persist immutable TuningCacheSnapshot(t-1) in Chronicle (Split 2)
+    // 1. Persist immutable TuningCacheSnapshot(t-1) idempotently in Chronicle (Split 2)
     let snap = TuningCacheSnapshot::cold_start();
     let snap_json = serde_json::to_string(&snap)?;
-    let _ = store.save_tuning_snapshot(
+    store.ensure_tuning_snapshot_idempotent(
         &snap.snapshot_id,
         &snap.created_utc,
         snap.resolved_n,
         &snap_json,
-    );
+    )?;
 
     let mut costs_r0 = Vec::new();
     let mut costs_r3 = Vec::new();
 
     for q in cohort {
         let contract_sha = format!("{:x}", Sha256::digest(q.title.as_bytes()));
-        conn.execute(
-            "INSERT OR IGNORE INTO questions (question_id, venue, title, contract_sha256, horizon_geometry, created_utc)
-             VALUES (?1, ?2, ?3, ?4, 'point_in_time', ?5)",
-            params![&q.question_id, &q.venue, &q.title, &contract_sha, &q.freeze_utc],
+        store.upsert_question_if_absent(
+            &q.question_id,
+            &q.venue,
+            &q.title,
+            &contract_sha,
+            "point_in_time",
+            &q.freeze_utc,
         )?;
         // Irreversible full-universe admission (INV-13)
         let disp = if q.simulate_abandoned {
@@ -374,36 +388,14 @@ pub fn run_m15_demo_pipeline(
         );
         let scrubbed_ev = MarketBlindingScrubber::scrub_text(&ev_text);
         let ev_art = vault.put_bytes("ov_brief", scrubbed_ev.as_bytes())?;
-        conn.execute(
-            "INSERT OR IGNORE INTO evidence_vault_index (ev_handle, sha256_hex, span_id, available_utc, byte_len, zstd_compressed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                ev_art.ev_handle.as_str(),
-                &ev_art.sha256_hex,
-                &ev_art.span_id,
-                &q.freeze_utc,
-                ev_art.byte_len as i64,
-                i64::from(ev_art.zstd_compressed),
-            ],
-        )?;
+        store.index_vault_artifact(&ev_art, &q.freeze_utc)?;
 
         if q.simulate_abandoned {
             let fail_trace = vault.put_bytes(
                 "abandoned_trace",
                 b"ABANDONED: right-censored maritime evidence; preserved permanently in EvidenceVault.",
             )?;
-            conn.execute(
-                "INSERT OR IGNORE INTO evidence_vault_index (ev_handle, sha256_hex, span_id, available_utc, byte_len, zstd_compressed)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    fail_trace.ev_handle.as_str(),
-                    &fail_trace.sha256_hex,
-                    &fail_trace.span_id,
-                    &q.freeze_utc,
-                    fail_trace.byte_len as i64,
-                    i64::from(fail_trace.zstd_compressed),
-                ],
-            )?;
+            store.index_vault_artifact(&fail_trace, &q.freeze_utc)?;
             costs_r0.push((q.question_id.clone(), 0.03));
             costs_r3.push((q.question_id.clone(), 0.14));
         } else {
@@ -461,16 +453,10 @@ pub fn run_m15_demo_pipeline(
                     BillingPacingTier::Full,
                     &snap,
                 );
-                let ev_plan = plan.evidence_plan.as_ref();
-                let bundle = ev_plan.map(|ep| {
-                    assemble_evidence_bundle(
-                        ep,
-                        vec![
-                            VerifiedEvidenceRef::parse(ev_art.ev_handle.as_str())
-                                .unwrap_or_else(|_| ev_art.ev_handle.clone()),
-                        ],
-                    )
-                });
+                let bundle = plan
+                    .evidence_plan
+                    .as_ref()
+                    .map(|ep| assemble_evidence_bundle(ep, vec![ev_art.ev_handle.clone()]));
 
                 // Optional live Gemini call via gemini-api-cli when --live-gemini is supplied
                 let raw_json_output = if let Some(client) = live_gemini {
@@ -520,11 +506,7 @@ pub fn run_m15_demo_pipeline(
                 };
 
                 let fc_id = format!("{arm_prefix}_{}", q.question_id);
-                conn.execute(
-                    "INSERT OR IGNORE INTO forecast_streams (forecast_id, question_id, stream_kind, origin_revision_id)
-                     VALUES (?1, ?2, 'live_tournament', NULL)",
-                    params![&fc_id, &q.question_id],
-                )?;
+                store.ensure_forecast_stream(&fc_id, &q.question_id, "live_tournament")?;
                 let rat_art = vault.put_bytes(
                     arm_prefix,
                     format!(
@@ -535,18 +517,7 @@ pub fn run_m15_demo_pipeline(
                     )
                     .as_bytes(),
                 )?;
-                conn.execute(
-                    "INSERT OR IGNORE INTO evidence_vault_index (ev_handle, sha256_hex, span_id, available_utc, byte_len, zstd_compressed)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![
-                        rat_art.ev_handle.as_str(),
-                        &rat_art.sha256_hex,
-                        &rat_art.span_id,
-                        &q.freeze_utc,
-                        rat_art.byte_len as i64,
-                        i64::from(rat_art.zstd_compressed),
-                    ],
-                )?;
+                store.index_vault_artifact(&rat_art, &q.freeze_utc)?;
 
                 let rev0 = UnsealedForecastRevision {
                     forecast_id: fc_id.clone(),

@@ -714,24 +714,7 @@ fn jaccard_similarity(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
     }
 }
 
-/// Parse a `YYYY-MM-DD` prefix into an approximate monotonic day count for date-window checks.
+/// Parse a `YYYY-MM-DD` prefix into an exact proleptic Gregorian day count via `fcast_core::time`.
 fn parse_ymd_days(ts: &str) -> Option<i64> {
-    let bytes = ts.as_bytes();
-    if bytes.len() < 10 || bytes[4] != b'-' || bytes[7] != b'-' {
-        return None;
-    }
-    let y: i64 = ts[0..4].parse().ok()?;
-    let m: i64 = ts[5..7].parse().ok()?;
-    let d: i64 = ts[8..10].parse().ok()?;
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-        return None;
-    }
-    // Howard Hinnant civil-from-days formula (exact proleptic Gregorian day number).
-    let y_adj = if m <= 2 { y - 1 } else { y };
-    let era = y_adj.div_euclid(400);
-    let yoe = y_adj - era * 400;
-    let mp = if m > 2 { m - 3 } else { m + 9 };
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some(era * 146_097 + doe)
+    fcast_core::time::parse_ymd_days(ts)
 }

@@ -554,107 +554,12 @@ impl BiTemporalAudit {
 }
 
 /// Parses UTC timestamps in `YYYY-MM-DD HH:MM`, `YYYY-MM-DDTHH:MMZ`,
-/// `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DDTHH:MM:SS.mmmZ` (space or `T` separator).
+/// `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DDTHH:MM:SS.mmmZ` (space or `T` separator)
+/// via canonical [`fcast_core::time::parse_utc_epoch_ms`].
 pub fn parse_utc_millis(raw: &str) -> Result<UtcMillis, VerifyError> {
-    let s = raw.trim();
-    let s = s.strip_suffix('Z').unwrap_or(s);
-    let (date_part, time_part) = s
-        .split_once('T')
-        .or_else(|| s.split_once(' '))
-        .ok_or_else(|| VerifyError::InvalidTimestamp(raw.to_owned()))?;
-
-    let mut d_iter = date_part.split('-');
-    let year: i64 = d_iter
-        .next()
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| VerifyError::InvalidTimestamp(raw.to_owned()))?;
-    let month: u32 = d_iter
-        .next()
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| VerifyError::InvalidTimestamp(raw.to_owned()))?;
-    let day: u32 = d_iter
-        .next()
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| VerifyError::InvalidTimestamp(raw.to_owned()))?;
-    if d_iter.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return Err(VerifyError::InvalidTimestamp(raw.to_owned()));
-    }
-    if day > days_in_month(year, month) {
-        return Err(VerifyError::InvalidTimestamp(raw.to_owned()));
-    }
-
-    let mut t_iter = time_part.split(':');
-    let hour: u32 = t_iter
-        .next()
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| VerifyError::InvalidTimestamp(raw.to_owned()))?;
-    let minute: u32 = t_iter
-        .next()
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| VerifyError::InvalidTimestamp(raw.to_owned()))?;
-    let (second, millis) = match t_iter.next() {
-        None => (0_u32, 0_u32),
-        Some(sec_str) => {
-            if let Some((sec_part, frac_part)) = sec_str.split_once('.') {
-                let sec: u32 = sec_part
-                    .parse()
-                    .map_err(|_| VerifyError::InvalidTimestamp(raw.to_owned()))?;
-                if frac_part.is_empty() || !frac_part.bytes().all(|b| b.is_ascii_digit()) {
-                    return Err(VerifyError::InvalidTimestamp(raw.to_owned()));
-                }
-                let ms: u32 = match frac_part.len() {
-                    1 => frac_part.parse::<u32>().unwrap_or(0) * 100,
-                    2 => frac_part.parse::<u32>().unwrap_or(0) * 10,
-                    _ => frac_part[..3]
-                        .parse::<u32>()
-                        .map_err(|_| VerifyError::InvalidTimestamp(raw.to_owned()))?,
-                };
-                (sec, ms)
-            } else {
-                let sec: u32 = sec_str
-                    .parse()
-                    .map_err(|_| VerifyError::InvalidTimestamp(raw.to_owned()))?;
-                (sec, 0)
-            }
-        }
-    };
-    if t_iter.next().is_some() || hour > 23 || minute > 59 || second > 59 || millis > 999 {
-        return Err(VerifyError::InvalidTimestamp(raw.to_owned()));
-    }
-
-    let days = days_from_civil(year, month, day);
-    let secs = days * 86_400 + i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second);
-    Ok(UtcMillis(secs * 1_000 + i64::from(millis)))
-}
-
-fn is_leap_year(y: i64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
-}
-
-fn days_in_month(y: i64, m: u32) -> u32 {
-    match m {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if is_leap_year(y) {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 0,
-    }
-}
-
-/// Howard Hinnant's civil-from-days inverse: days since 1970-01-01.
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-    let y = y - i64::from(m <= 2);
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let m_i = i64::from(m);
-    let doy = (153 * (m_i + if m_i > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(d) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
+    fcast_core::time::parse_utc_epoch_ms(raw)
+        .map(UtcMillis)
+        .map_err(|_| VerifyError::InvalidTimestamp(raw.to_owned()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,8 +907,10 @@ fn extract_anchor_probability(text: &str) -> Option<Result<f64, VerifyError>> {
 }
 
 /// Lightweight deterministic JSON structural scanner that rejects duplicate keys at every object
-/// level and catches truncated numeric literals before `serde_json` overwrites duplicate keys.
+/// level, enforces a nesting depth cap (`MAX_JSON_DEPTH = 64`), preserves full UTF-8 strings, and
+/// catches truncated numeric literals before `serde_json` overwrites duplicate keys.
 fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
+    const MAX_JSON_DEPTH: usize = 64;
     let bytes = raw.as_bytes();
     let mut i = 0_usize;
 
@@ -1013,7 +920,7 @@ fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
         }
     }
 
-    fn parse_string(b: &[u8], i: &mut usize) -> Result<String, VerifyError> {
+    fn parse_string(raw: &str, b: &[u8], i: &mut usize) -> Result<String, VerifyError> {
         if *i >= b.len() || b[*i] != b'"' {
             return Err(VerifyError::TruncatedOrInvalidLiteral(
                 "expected '\"'".to_owned(),
@@ -1021,13 +928,17 @@ fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
         }
         *i += 1;
         let mut out = String::new();
+        let mut seg_start = *i;
         while *i < b.len() {
             let c = b[*i];
-            *i += 1;
             if c == b'"' {
+                out.push_str(&raw[seg_start..*i]);
+                *i += 1;
                 return Ok(out);
             }
             if c == b'\\' {
+                out.push_str(&raw[seg_start..*i]);
+                *i += 1;
                 if *i >= b.len() {
                     return Err(VerifyError::TruncatedOrInvalidLiteral(
                         "truncated string escape".to_owned(),
@@ -1067,8 +978,9 @@ fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
                         ));
                     }
                 }
+                seg_start = *i;
             } else {
-                out.push(char::from(c));
+                *i += 1;
             }
         }
         Err(VerifyError::TruncatedOrInvalidLiteral(
@@ -1076,7 +988,12 @@ fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
         ))
     }
 
-    fn parse_value(b: &[u8], i: &mut usize) -> Result<(), VerifyError> {
+    fn parse_value(raw: &str, b: &[u8], i: &mut usize, depth: usize) -> Result<(), VerifyError> {
+        if depth > MAX_JSON_DEPTH {
+            return Err(VerifyError::TruncatedOrInvalidLiteral(
+                "JSON nesting depth limit exceeded".to_owned(),
+            ));
+        }
         skip_ws(b, i);
         if *i >= b.len() {
             return Err(VerifyError::TruncatedOrInvalidLiteral(
@@ -1094,7 +1011,7 @@ fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
                 }
                 loop {
                     skip_ws(b, i);
-                    let key = parse_string(b, i)?;
+                    let key = parse_string(raw, b, i)?;
                     if !seen.insert(key.clone()) {
                         return Err(VerifyError::DuplicateJsonKey(key));
                     }
@@ -1105,7 +1022,7 @@ fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
                         ));
                     }
                     *i += 1;
-                    parse_value(b, i)?;
+                    parse_value(raw, b, i, depth + 1)?;
                     skip_ws(b, i);
                     if *i >= b.len() {
                         return Err(VerifyError::TruncatedOrInvalidLiteral(
@@ -1134,7 +1051,7 @@ fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
                     return Ok(());
                 }
                 loop {
-                    parse_value(b, i)?;
+                    parse_value(raw, b, i, depth + 1)?;
                     skip_ws(b, i);
                     if *i >= b.len() {
                         return Err(VerifyError::TruncatedOrInvalidLiteral(
@@ -1156,7 +1073,7 @@ fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
                 }
             }
             b'"' => {
-                let _ = parse_string(b, i)?;
+                let _ = parse_string(raw, b, i)?;
                 Ok(())
             }
             b't' => {
@@ -1243,7 +1160,7 @@ fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
         }
     }
 
-    parse_value(bytes, &mut i)?;
+    parse_value(raw, bytes, &mut i, 0)?;
     skip_ws(bytes, &mut i);
     if i != bytes.len() {
         return Err(VerifyError::TruncatedOrInvalidLiteral(
@@ -1251,4 +1168,30 @@ fn check_no_duplicate_keys_and_complete(raw: &str) -> Result<(), VerifyError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_scanner_guards_depth_and_preserves_utf8_keys() {
+        // Reject deeply nested JSON (> MAX_JSON_DEPTH = 64) without stack overflow
+        let deep = format!("{}{}", "[".repeat(100), "]".repeat(100));
+        assert!(matches!(
+            parse_strict_prob_json(&deep),
+            Err(VerifyError::TruncatedOrInvalidLiteral(_))
+        ));
+
+        // Preserve UTF-8 multi-byte keys accurately and reject Unicode duplicate keys
+        let dup_utf8 = "{\"α\": 0.5, \"α\": 0.6}";
+        assert!(matches!(
+            parse_strict_prob_json(dup_utf8),
+            Err(VerifyError::DuplicateJsonKey(k)) if k == "α"
+        ));
+
+        let ok_utf8 = "{\"note\": \"αβγ\", \"probability\": 0.42}";
+        let p = parse_strict_prob_json(ok_utf8).expect("valid utf8 json");
+        assert!((p - 0.42).abs() < 1e-12);
+    }
 }

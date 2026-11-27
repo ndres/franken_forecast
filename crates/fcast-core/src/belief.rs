@@ -142,7 +142,13 @@ pub struct DirichletCategoricalBelief {
 impl DirichletCategoricalBelief {
     #[must_use]
     pub fn step(&self, delta_lls: &[f64], novelty: f64, kappa_lr: f64, still: bool) -> Self {
-        if still || delta_lls.len() != self.probs.len() {
+        if still
+            || self.probs.is_empty()
+            || delta_lls.len() != self.probs.len()
+            || !novelty.is_finite()
+            || !kappa_lr.is_finite()
+            || delta_lls.iter().any(|d| !d.is_finite())
+        {
             return self.clone();
         }
         let logs: Vec<f64> = self
@@ -154,6 +160,9 @@ impl DirichletCategoricalBelief {
         let max_log = logs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let exps: Vec<f64> = logs.iter().map(|x| (x - max_log).exp()).collect();
         let sum: f64 = exps.iter().sum();
+        if !sum.is_finite() || sum <= 0.0 {
+            return self.clone();
+        }
         let probs = exps.into_iter().map(|e| e / sum).collect();
         Self {
             probs,

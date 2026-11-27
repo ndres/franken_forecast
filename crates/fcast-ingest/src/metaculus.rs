@@ -807,7 +807,7 @@ impl ForecastBenchMedianBackfill {
             });
         }
         if let Some(row) = fb_median_row
-            && row.available_utc.as_str() <= as_of_utc
+            && fcast_core::time::is_utc_le(&row.available_utc, as_of_utc)
             && let Some(p) = row
                 .freeze_crowd_median
                 .or(row.sf_median)

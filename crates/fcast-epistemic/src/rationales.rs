@@ -84,7 +84,7 @@ pub fn resolve_crowd_prior(
         return Some((CrowdPriorSource::VenueLive, p));
     }
     if let Some(row) = fb_median_row
-        && row.available_utc.as_str() <= as_of_utc
+        && fcast_core::time::is_utc_le(&row.available_utc, as_of_utc)
         && let Some(val) = row
             .freeze_crowd_median
             .or(row.sf_median)
@@ -379,7 +379,7 @@ pub fn score_rationale(r: &RationaleRecord) -> Result<Option<ScoredRationale>, R
         vals[idx] = v;
     }
 
-    if (r.g1 || r.g2) && r.note.trim().len() < 10 {
+    if (r.g1 || r.g2) && r.note.trim().chars().count() < 10 {
         return Err(RationaleError::MissingGateJustification {
             gate: if r.g2 { "g2" } else { "g1" },
         });
