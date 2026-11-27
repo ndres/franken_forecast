@@ -15,6 +15,7 @@ pub const MIGRATION_0002_SQL: &str = include_str!("../migrations/0002_cyber_shif
 pub const MIGRATION_0003_SQL: &str = include_str!("../migrations/0003_event_consumers.sql");
 pub const MIGRATION_0004_SQL: &str = include_str!("../migrations/0004_immutability_and_chain.sql");
 pub const MIGRATION_0005_SQL: &str = include_str!("../migrations/0005_tuning_cache_snapshots.sql");
+pub const MIGRATION_0006_SQL: &str = include_str!("../migrations/0006_indexes.sql");
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -96,7 +97,7 @@ impl OperationalStore {
         let conn = Connection::open(&db_path)?;
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
+             PRAGMA synchronous = FULL;
              PRAGMA foreign_keys = ON;
              PRAGMA busy_timeout = 5000;
              PRAGMA wal_autocheckpoint = 1000;",
@@ -112,6 +113,7 @@ impl OperationalStore {
         self.conn.execute_batch(MIGRATION_0003_SQL)?;
         self.conn.execute_batch(MIGRATION_0004_SQL)?;
         self.conn.execute_batch(MIGRATION_0005_SQL)?;
+        self.conn.execute_batch(MIGRATION_0006_SQL)?;
         let sha = format!("{:x}", Sha256::digest(MIGRATION_0001_SQL.as_bytes()));
         self.conn.execute(
             "INSERT OR IGNORE INTO _fcast_migrations (version, name, sha256_hex, applied_utc)
@@ -139,6 +141,12 @@ impl OperationalStore {
                 sha5,
                 "2026-11-26T00:00:00Z"
             ],
+        )?;
+        let sha6 = format!("{:x}", Sha256::digest(MIGRATION_0006_SQL.as_bytes()));
+        self.conn.execute(
+            "INSERT OR IGNORE INTO _fcast_migrations (version, name, sha256_hex, applied_utc)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![6_i64, "0006_indexes", sha6, "2026-11-27T00:00:00Z"],
         )?;
         Ok(())
     }
@@ -188,6 +196,9 @@ impl OperationalStore {
     /// canonical epoch-ms `available_utc <= as_of_utc` (`INV-01`, `INV-03`), parent revision chain
     /// integrity & timestamp monotonicity, and emitting a transactional `RevisionSealed` event (`§13.2`).
     pub fn seal_forecast_revision(&self, rev: &ForecastRevision) -> Result<(), StoreError> {
+        // Re-verify canonical BLAKE3 revision_id, lifecycle, and distribution validity so
+        // in-memory mutations or bypassed seal paths can never persist a forged revision.
+        rev.verify_integrity()?;
         let rev_ms = parse_rfc3339_epoch_ms(&rev.as_of_utc)?;
         let dist_json = serde_json::to_string(&rev.probability_distribution)?;
         let ev_json = serde_json::to_string(&rev.evidence_handles)?;
@@ -394,14 +405,8 @@ impl OperationalStore {
         })
     }
 
-    /// Checks daily spend circuit breaker (`$5.00/day` default cap) before metered job dispatch.
-    /// Fail-closed on non-finite or negative `est_usd` estimates.
-    pub fn check_budget_available(&self, utc_day: &str, est_usd: f64) -> Result<(), StoreError> {
-        if !est_usd.is_finite() || est_usd < 0.0 {
-            return Err(StoreError::IntegrityFailed(format!(
-                "invalid estimated job cost: {est_usd}"
-            )));
-        }
+    /// Reads `(spent_usd, cap_usd)` from `daemon_budget_ledger` for `utc_day` (defaults to `(0.0, 5.0)`).
+    pub fn get_budget_status(&self, utc_day: &str) -> Result<(f64, f64), StoreError> {
         let row: Option<(f64, f64)> = self
             .conn
             .query_row(
@@ -410,7 +415,59 @@ impl OperationalStore {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let (spent_usd, cap_usd) = row.unwrap_or((0.0, 5.0));
+        Ok(row.unwrap_or((0.0, 5.0)))
+    }
+
+    /// Atomically records realized metered LLM/API spend in `daemon_budget_ledger` (`§13`).
+    pub fn record_budget_spend(
+        &self,
+        utc_day: &str,
+        delta_usd: f64,
+        default_cap_usd: f64,
+    ) -> Result<(f64, f64), StoreError> {
+        if !delta_usd.is_finite()
+            || delta_usd < 0.0
+            || !default_cap_usd.is_finite()
+            || default_cap_usd <= 0.0
+        {
+            return Err(StoreError::IntegrityFailed(format!(
+                "invalid budget spend parameters: delta={delta_usd}, cap={default_cap_usd}"
+            )));
+        }
+        self.conn.execute_batch("BEGIN IMMEDIATE;")?;
+        let res = (|| -> Result<(f64, f64), StoreError> {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO daemon_budget_ledger (utc_day, spent_usd, cap_usd)
+                 VALUES (?1, 0.0, ?2)",
+                params![utc_day, default_cap_usd],
+            )?;
+            self.conn.execute(
+                "UPDATE daemon_budget_ledger SET spent_usd = spent_usd + ?1 WHERE utc_day = ?2",
+                params![delta_usd, utc_day],
+            )?;
+            self.get_budget_status(utc_day)
+        })();
+        match res {
+            Ok(pair) => {
+                self.conn.execute_batch("COMMIT;")?;
+                Ok(pair)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                Err(e)
+            }
+        }
+    }
+
+    /// Checks daily spend circuit breaker (`$5.00/day` default cap) before metered job dispatch.
+    /// Fail-closed on non-finite or negative `est_usd` estimates.
+    pub fn check_budget_available(&self, utc_day: &str, est_usd: f64) -> Result<(), StoreError> {
+        if !est_usd.is_finite() || est_usd < 0.0 {
+            return Err(StoreError::IntegrityFailed(format!(
+                "invalid estimated job cost: {est_usd}"
+            )));
+        }
+        let (spent_usd, cap_usd) = self.get_budget_status(utc_day)?;
         if !spent_usd.is_finite() || !cap_usd.is_finite() || spent_usd + est_usd > cap_usd {
             return Err(StoreError::BudgetCapExceeded {
                 spent_usd,

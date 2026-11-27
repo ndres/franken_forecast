@@ -474,7 +474,7 @@ impl BiTemporalAudit {
         let second_source = qualifying.get(1).map(|(_, item)| (*item).clone());
         let first_pub_ms = qualifying.first().map(|(t, _)| *t);
 
-        let mut earlier_signals: Vec<AuditEvidenceItem> = parsed_items
+        let mut earlier_keyed: Vec<(UtcMillis, AuditEvidenceItem)> = parsed_items
             .iter()
             .copied()
             .filter(|(pub_ms, item)| {
@@ -482,9 +482,14 @@ impl BiTemporalAudit {
                     && !item.satisfies_rules
                     && first_pub_ms.is_none_or(|fp| *pub_ms <= fp)
             })
-            .map(|(_, item)| item.clone())
+            .map(|(pub_ms, item)| (pub_ms, item.clone()))
             .collect();
-        earlier_signals.sort_by(|a, b| a.published_utc.cmp(&b.published_utc));
+        earlier_keyed.sort_by(|(t_a, a), (t_b, b)| {
+            t_a.cmp(t_b)
+                .then_with(|| a.who_or_outlet.cmp(&b.who_or_outlet))
+        });
+        let earlier_signals: Vec<AuditEvidenceItem> =
+            earlier_keyed.into_iter().map(|(_, item)| item).collect();
 
         let per_question_resolution = question_contracts
             .iter()

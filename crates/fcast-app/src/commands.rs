@@ -258,9 +258,11 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
     let question_id = args
         .first()
         .filter(|s| !s.starts_with("--"))
-        .ok_or("usage: fcast forecast <question_id> --title <t> --as-of <utc> [--model <m>] [--dry-run] [--data-root <dir>]")?;
+        .ok_or("usage: fcast forecast <question_id> --title <t> --as-of <utc> [--close-utc <utc>] [--criteria <text>] [--model <m>] [--dry-run] [--data-root <dir>]")?;
     let mut title = format!("Forecast question {question_id}");
     let mut as_of_utc = "2026-11-27T12:00:00Z".to_owned();
+    let mut close_utc: Option<String> = None;
+    let mut criteria: Option<String> = None;
     let mut model = GEMINI_4_HYDROGEN.to_owned();
     let mut dry_run = false;
     let mut data_root = default_data_root();
@@ -274,6 +276,14 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
             }
             "--as-of" => {
                 as_of_utc = require_flag_value(args, i, "--as-of")?.to_owned();
+                i += 2;
+            }
+            "--close-utc" => {
+                close_utc = Some(require_flag_value(args, i, "--close-utc")?.to_owned());
+                i += 2;
+            }
+            "--criteria" => {
+                criteria = Some(require_flag_value(args, i, "--criteria")?.to_owned());
                 i += 2;
             }
             "--model" | "-m" => {
@@ -291,6 +301,23 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
             other => return Err(format!("unknown flag for `fcast forecast`: {other}").into()),
         }
     }
+
+    let now_sec = fcast_core::time::parse_rfc3339_epoch_ms(&as_of_utc)? / 1_000;
+    let close_sec = match &close_utc {
+        Some(c) => fcast_core::time::parse_rfc3339_epoch_ms(c)? / 1_000,
+        None => now_sec + 86_400,
+    };
+    let time_budget = TimeBudget::from_epochs(now_sec, None, close_sec);
+    let utc_day = as_of_utc.get(0..10).unwrap_or("1970-01-01");
+
+    // Read live budget pacing tier from existing store if initialized (never hardcoding Full).
+    let (spent_usd, cap_usd) = if data_root.join("db").join("ops.fsqlite").exists() {
+        let ro_store = OperationalStore::open(data_root.join("db").join("ops.fsqlite"))?;
+        ro_store.get_budget_status(utc_day)?
+    } else {
+        (0.0, 5.0)
+    };
+    let pacing = BillingPacingTier::from_spend(spent_usd, cap_usd);
 
     let snap = TuningCacheSnapshot::cold_start();
     let intake = IntakeSnapshot {
@@ -310,8 +337,8 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
         &intake,
         &as_of_utc,
         &PlanConstraintSpec::default(),
-        &TimeBudget::from_epochs(10_000, Some(15_000), 20_000),
-        BillingPacingTier::Full,
+        &time_budget,
+        pacing,
         &snap,
     );
     if plan.skipped {
@@ -339,6 +366,7 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
             "question_id": question_id,
             "as_of_utc": as_of_utc,
             "model": model,
+            "pacing_tier": pacing,
             "selected_rep": plan.selected_rep,
             "reasoning_effort": plan.reasoning_effort,
             "context_tier": plan.context_tier,
@@ -352,6 +380,9 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
     let layout = DataRootLayout::init(&data_root)?;
     let store = OperationalStore::open(&layout.db_path)?;
     let vault = EvidenceVault::open(&layout.vault_dir)?;
+    if let Some(cost_usd) = resp.usage.as_ref().and_then(|u| u.estimated_cost_usd) {
+        let _ = store.record_budget_spend(utc_day, cost_usd, cap_usd)?;
+    }
     store.ensure_tuning_snapshot_idempotent(
         &snap.snapshot_id,
         &snap.created_utc,
@@ -360,7 +391,11 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
     )?;
 
     let ev_art = vault.put_bytes("cli_brief", scrubbed.as_bytes())?;
-    let contract_sha = format!("{:x}", Sha256::digest(title.as_bytes()));
+    let contract_basis = match &criteria {
+        Some(c) => format!("{title}\n---\n{c}"),
+        None => title.clone(),
+    };
+    let contract_sha = format!("{:x}", Sha256::digest(contract_basis.as_bytes()));
     store.upsert_question_if_absent(
         question_id,
         "cli",
@@ -375,10 +410,31 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
         .as_ref()
         .map(|ep| assemble_evidence_bundle(ep, vec![ev_art.ev_handle.clone()]));
 
+    let fc_id = format!("fc_cli_{question_id}");
+    store.ensure_forecast_stream(&fc_id, question_id, "live_tournament")?;
+    let prior_proj = store.project_at_horizon(&fc_id, &as_of_utc)?;
+    let p_prev = match &prior_proj {
+        HorizonProjection::StandingRevision {
+            revision_id,
+            p_indep,
+            ..
+        } => {
+            return Ok(serde_json::to_string_pretty(&serde_json::json!({
+                "status": "already_issued",
+                "revision_id": revision_id,
+                "forecast_id": fc_id,
+                "question_id": question_id,
+                "p_indep": p_indep.get(),
+                "dry_run": false,
+            }))?);
+        }
+        HorizonProjection::NotYetIssued => ProbClamped::clamp_lossy(0.50),
+    };
+
     let (p_guarded, _) = PreLoomGuard::extract_and_guard_prob(&resp.text, 1)?;
     let final_p = match PostProposalAudit::evaluate_binding(&DraftRevisionProposal {
         question_id: question_id.clone(),
-        p_prev: ProbClamped::clamp_lossy(0.50),
+        p_prev,
         p_proposed: p_guarded,
         is_freeze_deadline: false,
         contract_misread_g1: false,
@@ -390,24 +446,6 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
             return Err(format!("binding audit blocked publish: {reason}").into());
         }
     };
-
-    let fc_id = format!("fc_cli_{question_id}");
-    store.ensure_forecast_stream(&fc_id, question_id, "live_tournament")?;
-    if let HorizonProjection::StandingRevision {
-        revision_id,
-        p_indep,
-        ..
-    } = store.project_at_horizon(&fc_id, &as_of_utc)?
-    {
-        return Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "status": "already_issued",
-            "revision_id": revision_id,
-            "forecast_id": fc_id,
-            "question_id": question_id,
-            "p_indep": p_indep.get(),
-            "dry_run": false,
-        }))?);
-    }
 
     let rat_art = vault.put_bytes(
         "cli_rat",

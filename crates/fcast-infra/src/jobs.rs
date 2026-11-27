@@ -5,6 +5,8 @@ use fsqlite::blocking::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_JOB_ATTEMPTS: i64 = 3;
+/// Default maximum number of `domain_events` returned per poll call to bound memory usage.
+pub const DEFAULT_EVENT_POLL_LIMIT: usize = 10_000;
 
 /// Five-tier priority preemption schedule (`§13.2`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -188,15 +190,34 @@ impl<'a> DurableJobStore<'a> {
         })
     }
 
-    /// Reclaims stale `RUNNING` visibility leases after `SIGKILL` / daemon crash (`GATE-19`).
+    /// Atomically reclaims stale `RUNNING` visibility leases after `SIGKILL` / daemon crash (`GATE-19`).
+    /// Increments `attempts` on every reclaim and quarantines poison-pill jobs into `DEAD_LETTER`
+    /// once `attempts >= MAX_JOB_ATTEMPTS` so hung/crashing tasks cannot loop forever.
     pub fn reclaim_expired_leases(&self, now_epoch: i64) -> Result<usize, StoreError> {
-        let n = self.store.connection().execute(
-            "UPDATE fcast_jobs
-             SET state = 'QUEUED', lease_expires_epoch = NULL
-             WHERE state = 'RUNNING' AND lease_expires_epoch < ?1",
-            params![now_epoch],
-        )?;
-        Ok(n)
+        self.run_immediate_tx(|| {
+            let dead_lettered = self.store.connection().execute(
+                "UPDATE fcast_jobs
+                 SET attempts = attempts + 1,
+                     state = 'DEAD_LETTER',
+                     lease_expires_epoch = NULL,
+                     last_error = 'lease expired (max attempts reached)'
+                 WHERE state = 'RUNNING'
+                   AND lease_expires_epoch < ?1
+                   AND attempts + 1 >= ?2",
+                params![now_epoch, MAX_JOB_ATTEMPTS],
+            )?;
+            let requeued = self.store.connection().execute(
+                "UPDATE fcast_jobs
+                 SET attempts = attempts + 1,
+                     state = 'QUEUED',
+                     lease_expires_epoch = NULL
+                 WHERE state = 'RUNNING'
+                   AND lease_expires_epoch < ?1
+                   AND attempts + 1 < ?2",
+                params![now_epoch, MAX_JOB_ATTEMPTS],
+            )?;
+            Ok(dead_lettered + requeued)
+        })
     }
 
     /// Atomically records a job failure; quarantines into `DEAD_LETTER` once `attempts >= MAX_JOB_ATTEMPTS` (`§13.2`).
@@ -250,15 +271,29 @@ impl<'a> DurableJobStore<'a> {
         Ok(n > 0)
     }
 
-    /// Polls domain events strictly after `after_seq` in deterministic `event_seq ASC` order.
+    /// Polls up to [`DEFAULT_EVENT_POLL_LIMIT`] domain events strictly after `after_seq`
+    /// in deterministic `event_seq ASC` order.
     pub fn poll_domain_events(&self, after_seq: i64) -> Result<Vec<DomainEventRecord>, StoreError> {
+        self.poll_domain_events_limited(after_seq, DEFAULT_EVENT_POLL_LIMIT)
+    }
+
+    /// Polls at most `limit` domain events strictly after `after_seq` in deterministic `event_seq ASC` order.
+    pub fn poll_domain_events_limited(
+        &self,
+        after_seq: i64,
+        limit: usize,
+    ) -> Result<Vec<DomainEventRecord>, StoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let mut stmt = self.store.connection().prepare(
             "SELECT event_seq, event_kind, question_id, forecast_id, as_of_utc, idempotency_key, payload_json
              FROM domain_events
              WHERE event_seq > ?1
-             ORDER BY event_seq ASC",
+             ORDER BY event_seq ASC
+             LIMIT ?2",
         )?;
-        let mut rows = stmt.query(params![after_seq])?;
+        let mut rows = stmt.query(params![after_seq, limit as i64])?;
         let mut out = Vec::new();
         while let Some(r) = rows.next()? {
             out.push(DomainEventRecord {

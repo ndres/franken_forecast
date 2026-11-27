@@ -8,10 +8,16 @@
 
 use crate::daemon::scrub_secrets;
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 use thiserror::Error;
+
+/// Default subprocess wall-clock timeout for `gemini-api` invocations (`120 s`).
+pub const DEFAULT_CLI_TIMEOUT_SEC: u64 = 120;
+/// Default maximum stdout/stderr capture size (`16 MiB`) preventing unbounded OOM.
+pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Default general-purpose Gemini 4 model (`gemini-api-cli` default).
 pub const GEMINI_4_HYDROGEN: &str = "gemini-4-hydrogen";
@@ -44,6 +50,10 @@ pub enum GeminiCliError {
     UsageValidation { stderr: String },
     #[error("`gemini-api` runtime/API error (exit {code}): {stderr}")]
     RuntimeApi { code: i32, stderr: String },
+    #[error("`gemini-api` subprocess timed out after {timeout_sec}s and was terminated")]
+    TimedOut { timeout_sec: u64 },
+    #[error("`gemini-api` subprocess output exceeded hard cap ({cap_bytes} bytes)")]
+    OutputTooLarge { cap_bytes: usize },
     #[error("failed to parse `gemini-api` JSON output: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -63,6 +73,10 @@ pub struct GeminiCliConfig {
     pub home_override: Option<PathBuf>,
     /// Disable OS keyring lookup (`GEMINI_NO_KEYRING=1`).
     pub no_keyring: bool,
+    /// Hard wall-clock timeout in seconds (`DEFAULT_CLI_TIMEOUT_SEC`).
+    pub timeout_sec: u64,
+    /// Hard byte cap on captured stdout/stderr (`DEFAULT_MAX_OUTPUT_BYTES`).
+    pub max_output_bytes: usize,
 }
 
 impl Default for GeminiCliConfig {
@@ -77,6 +91,8 @@ impl Default for GeminiCliConfig {
             api_revision: None,
             home_override: None,
             no_keyring: false,
+            timeout_sec: DEFAULT_CLI_TIMEOUT_SEC,
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
         }
     }
 }
@@ -138,6 +154,15 @@ pub struct GeminiAnalyzeRequest {
     pub dry_run: bool,
 }
 
+/// Token and estimated USD cost usage parsed from a Gemini Interactions response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeminiUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub estimated_cost_usd: Option<f64>,
+}
+
 /// Normalized response returned by `gemini-api generate`, `analyze`, or `agent status`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiGenerateResponse {
@@ -146,6 +171,7 @@ pub struct GeminiGenerateResponse {
     pub model: String,
     pub text: String,
     pub dry_run: bool,
+    pub usage: Option<GeminiUsage>,
     pub raw_json: serde_json::Value,
 }
 
@@ -300,7 +326,9 @@ impl GeminiCliClient {
         Ok(parse_generate_response(&req.model, raw))
     }
 
-    /// Launches a background managed agent (`deep-research-preview-04-2026`, `antigravity-preview-09-2026`).
+    /// Launches a background managed agent (`deep-research-preview-04-2026`, `antigravity-preview-09-2026`),
+    /// delivering the prompt JSON body over stdin (`--body @-`) so prompts never appear in `argv`/`ps`
+    /// or hit Linux's 128 KB per-argument ceiling.
     pub fn agent_run_background(
         &self,
         agent_id: &str,
@@ -313,27 +341,43 @@ impl GeminiCliClient {
                 stderr: format!("invalid agent_id: {agent_id:?}"),
             });
         }
+        let mut payload = match body_json {
+            Some(serde_json::Value::Object(map)) => map.clone(),
+            Some(_) => {
+                return Err(GeminiCliError::UsageValidation {
+                    stderr: "body_json must be a JSON object".into(),
+                });
+            }
+            None => serde_json::Map::new(),
+        };
+        payload.insert(
+            "agent".to_owned(),
+            serde_json::Value::String(agent_id.to_owned()),
+        );
+        payload.insert(
+            "input".to_owned(),
+            serde_json::Value::String(prompt.to_owned()),
+        );
+        payload.insert("background".to_owned(), serde_json::Value::Bool(true));
+        let body_bytes = serde_json::Value::Object(payload).to_string();
+
         let mut args = vec![
             "agent".to_owned(),
             "run".to_owned(),
             "--agent".to_owned(),
             agent_id.to_owned(),
             "--background".to_owned(),
+            "--body".to_owned(),
+            "@-".to_owned(),
             "--no-interactive".to_owned(),
             "-o".to_owned(),
             "json".to_owned(),
         ];
-        if let Some(body) = body_json {
-            args.push("--body".to_owned());
-            args.push(body.to_string());
-        }
         if dry_run {
             args.push("--dry-run".to_owned());
         }
         self.push_global_flags(&mut args);
-        args.push("--".to_owned());
-        args.push(prompt.to_owned());
-        let raw = self.run_json(&args, None)?;
+        let raw = self.run_json(&args, Some(body_bytes.as_bytes()))?;
         let id = raw
             .get("id")
             .and_then(serde_json::Value::as_str)
@@ -434,11 +478,17 @@ impl GeminiCliClient {
             }
         })?;
 
-        // Stream stdin on a scoped thread while draining stdout/stderr so large prompts never
-        // deadlock OS pipe buffers and early child exits (e.g., auth failure -> EPIPE) still
-        // surface their structured stderr & exit code.
-        let output = std::thread::scope(|scope| -> Result<std::process::Output, std::io::Error> {
-            let writer_handle = match (stdin_bytes, child.stdin.take()) {
+        // Stream stdin and bounded stdout/stderr concurrently while polling `try_wait` against
+        // `timeout_sec` so large prompts never deadlock, hung processes are terminated, and
+        // oversized output cannot OOM the caller.
+        let cap = self.config.max_output_bytes.max(1024);
+        let timeout_sec = self.config.timeout_sec.max(1);
+        let deadline = Instant::now() + Duration::from_secs(timeout_sec);
+        let mut timed_out = false;
+        let mut status_opt = None;
+
+        let (stdout_res, stderr_res) = std::thread::scope(|scope| {
+            let stdin_handle = match (stdin_bytes, child.stdin.take()) {
                 (Some(bytes), Some(mut stdin)) => Some(scope.spawn(move || {
                     if let Err(e) = stdin.write_all(bytes)
                         && e.kind() != std::io::ErrorKind::BrokenPipe
@@ -449,17 +499,61 @@ impl GeminiCliClient {
                 })),
                 _ => None,
             };
-            let output = child.wait_with_output()?;
-            if let Some(handle) = writer_handle
-                && let Ok(write_res) = handle.join()
-            {
-                write_res?;
+            let stdout_handle = child
+                .stdout
+                .take()
+                .map(|mut out| scope.spawn(move || read_bounded_pipe(&mut out, cap)));
+            let stderr_handle = child
+                .stderr
+                .take()
+                .map(|mut err| scope.spawn(move || read_bounded_pipe(&mut err, cap)));
+
+            loop {
+                match child.try_wait() {
+                    Ok(Some(st)) => {
+                        status_opt = Some(st);
+                        break;
+                    }
+                    Ok(None) => {
+                        if Instant::now() >= deadline {
+                            timed_out = true;
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
             }
-            Ok(output)
+
+            if let Some(h) = stdin_handle {
+                let _ = h.join();
+            }
+            let out = stdout_handle
+                .and_then(|h| h.join().ok())
+                .unwrap_or_else(|| Ok(Vec::new()));
+            let err = stderr_handle
+                .and_then(|h| h.join().ok())
+                .unwrap_or_else(|| Ok(Vec::new()));
+            (out, err)
+        });
+
+        if timed_out {
+            return Err(GeminiCliError::TimedOut { timeout_sec });
+        }
+        let stdout_bytes = stdout_res?;
+        let stderr_bytes = stderr_res?;
+        let status = status_opt.ok_or_else(|| {
+            GeminiCliError::Io(std::io::Error::other("failed to collect child exit status"))
         })?;
-        if !output.status.success() {
-            let code = output.status.code().unwrap_or(1);
-            let stderr = scrub_secrets(&String::from_utf8_lossy(&output.stderr))
+        if !status.success() {
+            let code = status.code().unwrap_or(1);
+            let stderr = scrub_secrets(&String::from_utf8_lossy(&stderr_bytes))
                 .trim()
                 .to_owned();
             return Err(match code {
@@ -472,9 +566,19 @@ impl GeminiCliClient {
             });
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = String::from_utf8_lossy(&stdout_bytes);
         Ok(serde_json::from_str(stdout.trim())?)
     }
+}
+
+fn read_bounded_pipe<R: Read>(reader: &mut R, cap: usize) -> Result<Vec<u8>, GeminiCliError> {
+    let mut buf = Vec::new();
+    let mut limited = reader.take((cap as u64).saturating_add(1));
+    limited.read_to_end(&mut buf)?;
+    if buf.len() > cap {
+        return Err(GeminiCliError::OutputTooLarge { cap_bytes: cap });
+    }
+    Ok(buf)
 }
 
 /// Extracts reply text from a Gemini Interactions API JSON response (`gemini-api --stream=false -o json`).
@@ -538,6 +642,7 @@ fn parse_generate_response(default_model: &str, raw: serde_json::Value) -> Gemin
         .unwrap_or(default_model)
         .to_owned();
     let text = extract_interaction_text(&raw);
+    let usage = parse_usage(&raw);
 
     GeminiGenerateResponse {
         id,
@@ -545,8 +650,46 @@ fn parse_generate_response(default_model: &str, raw: serde_json::Value) -> Gemin
         model,
         text,
         dry_run,
+        usage,
         raw_json: raw,
     }
+}
+
+fn parse_usage(raw: &serde_json::Value) -> Option<GeminiUsage> {
+    let u = raw.get("usage").or_else(|| raw.get("usage_metadata"))?;
+    let input_tokens = u
+        .get("input_tokens")
+        .or_else(|| u.get("prompt_token_count"))
+        .and_then(serde_json::Value::as_u64);
+    let output_tokens = u
+        .get("output_tokens")
+        .or_else(|| u.get("candidates_token_count"))
+        .and_then(serde_json::Value::as_u64);
+    let total_tokens = u
+        .get("total_tokens")
+        .or_else(|| u.get("total_token_count"))
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| match (input_tokens, output_tokens) {
+            (Some(i), Some(o)) => Some(i.saturating_add(o)),
+            _ => None,
+        });
+    let explicit_cost = u
+        .get("estimated_cost_usd")
+        .or_else(|| u.get("cost_usd"))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|c| c.is_finite() && *c >= 0.0);
+    // Conservative fallback cost estimate when provider returns token counts without USD cost.
+    let estimated_cost_usd = explicit_cost.or_else(|| {
+        let inp = input_tokens? as f64;
+        let out = output_tokens.unwrap_or(0) as f64;
+        Some((inp * 1.25e-6) + (out * 5.0e-6))
+    });
+    Some(GeminiUsage {
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        estimated_cost_usd,
+    })
 }
 
 #[cfg(test)]
@@ -567,6 +710,61 @@ mod tests {
         assert!(matches!(
             client.agent_run_background("--evil", "hello", None, true),
             Err(GeminiCliError::UsageValidation { .. })
+        ));
+    }
+
+    #[test]
+    fn parses_usage_and_enforces_subprocess_timeout_and_output_cap() {
+        let with_cost = serde_json::json!({
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "estimated_cost_usd": 0.042
+            }
+        });
+        let u1 = parse_usage(&with_cost).expect("usage with cost");
+        assert_eq!(u1.total_tokens, Some(1200));
+        assert!((u1.estimated_cost_usd.expect("cost") - 0.042).abs() < 1e-12);
+
+        let tokens_only = serde_json::json!({
+            "usage_metadata": {
+                "prompt_token_count": 2000,
+                "candidates_token_count": 500
+            }
+        });
+        let u2 = parse_usage(&tokens_only).expect("usage fallback");
+        assert_eq!(u2.total_tokens, Some(2500));
+        assert!(u2.estimated_cost_usd.expect("fallback cost") > 0.0);
+
+        // Subprocess timeout kills hung process
+        let sleeper = GeminiCliClient::new(GeminiCliConfig {
+            binary: PathBuf::from("/bin/sleep"),
+            timeout_sec: 1,
+            ..GeminiCliConfig::default()
+        });
+        let err = sleeper.run_json(&["10".to_owned()], None);
+        assert!(matches!(
+            err,
+            Err(GeminiCliError::TimedOut { timeout_sec: 1 })
+        ));
+
+        // Output cap rejects oversized stdout
+        let noisy = GeminiCliClient::new(GeminiCliConfig {
+            binary: PathBuf::from("/bin/sh"),
+            timeout_sec: 5,
+            max_output_bytes: 1024,
+            ..GeminiCliConfig::default()
+        });
+        let err_cap = noisy.run_json(
+            &[
+                "-c".to_owned(),
+                "dd if=/dev/zero bs=1024 count=4 2>/dev/null | tr '\\0' 'a'".to_owned(),
+            ],
+            None,
+        );
+        assert!(matches!(
+            err_cap,
+            Err(GeminiCliError::OutputTooLarge { cap_bytes: 1024 })
         ));
     }
 }

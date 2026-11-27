@@ -17,12 +17,27 @@ pub enum ForecastError {
     LifecycleInvariant(&'static str),
     #[error("attribution waterfall residual {0:.3e} exceeds 1e-10")]
     WaterfallResidual(f64),
+    #[error("revision_id mismatch: expected canonical {expected}, got {actual}")]
+    RevisionIdMismatch { expected: String, actual: String },
 }
 
-/// Strictly clamped probability in `[1e-6, 1 - 1e-6]`.
+/// Strictly clamped probability in `[1e-6, 1 - 1e-6]`, validated on both construction and deserialization.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
+#[serde(try_from = "f64", into = "f64")]
 pub struct ProbClamped(f64);
+
+impl TryFrom<f64> for ProbClamped {
+    type Error = ForecastError;
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<ProbClamped> for f64 {
+    fn from(value: ProbClamped) -> Self {
+        value.0
+    }
+}
 
 impl ProbClamped {
     pub fn new(p: f64) -> Result<Self, ForecastError> {
@@ -138,18 +153,50 @@ impl OutcomeDistribution {
                 Ok(())
             }
             Self::Cdf201 { grid, n_eff } => {
-                if grid.len() < 2 || !n_eff.is_finite() || *n_eff < 0.0 {
-                    return Err(ForecastError::InvalidCdf("grid must have >= 2 points"));
+                // Shared across continuous 201-point CDFs, discrete (inbound_outcome_count + 1) grids,
+                // and Mantic N<=31 CDFs; enforces 2..=201 length, [0.0, 1.0] bounds, and monotonicity.
+                if grid.len() < 2 || grid.len() > 201 || !n_eff.is_finite() || *n_eff < 0.0 {
+                    return Err(ForecastError::InvalidCdf(
+                        "grid must have 2..=201 points and finite non-negative n_eff",
+                    ));
+                }
+                if grid
+                    .iter()
+                    .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+                {
+                    return Err(ForecastError::InvalidCdf("cdf values must be in [0, 1]"));
                 }
                 for win in grid.windows(2) {
-                    if !win[0].is_finite() || !win[1].is_finite() || win[1] < win[0] {
-                        return Err(ForecastError::InvalidCdf(
-                            "cdf must be finite and non-decreasing",
-                        ));
+                    if win[1] < win[0] {
+                        return Err(ForecastError::InvalidCdf("cdf must be non-decreasing"));
                     }
                 }
                 Ok(())
             }
+        }
+    }
+
+    /// Canonical 1e-9-rounded JSON projection used inside `ForecastRevision` BLAKE3 hashing
+    /// so cross-platform float ULP drift never alters `revision_id`.
+    #[must_use]
+    pub fn canonical_digest_json(&self) -> serde_json::Value {
+        let round9 = |x: f64| -> f64 { (x * 1e9).round() / 1e9 };
+        match self {
+            Self::Binary { p, n_eff } => serde_json::json!({
+                "kind": "binary",
+                "p": round9(p.get()),
+                "n_eff": round9(*n_eff),
+            }),
+            Self::Categorical { probs, dirichlet_n } => serde_json::json!({
+                "kind": "categorical",
+                "probs": probs.iter().map(|&v| round9(v)).collect::<Vec<_>>(),
+                "dirichlet_n": round9(*dirichlet_n),
+            }),
+            Self::Cdf201 { grid, n_eff } => serde_json::json!({
+                "kind": "cdf201",
+                "grid": grid.iter().map(|&v| round9(v)).collect::<Vec<_>>(),
+                "n_eff": round9(*n_eff),
+            }),
         }
     }
 }
@@ -198,7 +245,11 @@ impl AttributionWaterfall {
 }
 
 /// Canonical 12-field immutable `ForecastRevision` (`KA-00`, `§7.1`).
+///
+/// Deserialization validates lifecycle invariants, `probability_distribution`, and exact
+/// canonical BLAKE3 `revision_id` integrity via [`ForecastRevision::verify_integrity`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ForecastRevisionDto")]
 pub struct ForecastRevision {
     pub forecast_id: String,
     pub revision_id: String,
@@ -214,6 +265,132 @@ pub struct ForecastRevision {
     pub calibration_version: String,
     pub rationale_handle: VerifiedEvidenceRef,
     pub resolution_status: ResolutionStatusAtCutoff,
+}
+
+#[derive(Deserialize)]
+struct ForecastRevisionDto {
+    forecast_id: String,
+    revision_id: String,
+    seq_no: u32,
+    parent_revision_id: Option<String>,
+    question_id: String,
+    as_of_utc: String,
+    p_indep: ProbClamped,
+    p_market: Option<ProbClamped>,
+    probability_distribution: OutcomeDistribution,
+    evidence_handles: Vec<VerifiedEvidenceRef>,
+    model_version: String,
+    calibration_version: String,
+    rationale_handle: VerifiedEvidenceRef,
+    resolution_status: ResolutionStatusAtCutoff,
+}
+
+impl TryFrom<ForecastRevisionDto> for ForecastRevision {
+    type Error = ForecastError;
+    fn try_from(dto: ForecastRevisionDto) -> Result<Self, Self::Error> {
+        let rev = Self {
+            forecast_id: dto.forecast_id,
+            revision_id: dto.revision_id,
+            seq_no: dto.seq_no,
+            parent_revision_id: dto.parent_revision_id,
+            question_id: dto.question_id,
+            as_of_utc: dto.as_of_utc,
+            p_indep: dto.p_indep,
+            p_market: dto.p_market,
+            probability_distribution: dto.probability_distribution,
+            evidence_handles: dto.evidence_handles,
+            model_version: dto.model_version,
+            calibration_version: dto.calibration_version,
+            rationale_handle: dto.rationale_handle,
+            resolution_status: dto.resolution_status,
+        };
+        rev.verify_integrity()?;
+        Ok(rev)
+    }
+}
+
+impl ForecastRevision {
+    /// Recomputes the canonical BLAKE3 `revision_id` from normalized fields (all floats rounded to `1e-9`).
+    #[must_use]
+    pub fn compute_canonical_revision_id(&self) -> String {
+        let mut sorted_handles = self.evidence_handles.clone();
+        sorted_handles.sort();
+        sorted_handles.dedup();
+        compute_revision_id_parts(
+            &self.forecast_id,
+            self.seq_no,
+            self.parent_revision_id.as_deref(),
+            &self.question_id,
+            &self.as_of_utc,
+            self.p_indep,
+            self.p_market,
+            &self.probability_distribution,
+            &sorted_handles,
+            &self.model_version,
+            &self.calibration_version,
+            &self.rationale_handle,
+            self.resolution_status,
+        )
+    }
+
+    /// Re-verifies lifecycle invariants, distribution validity, and exact BLAKE3 `revision_id` match.
+    pub fn verify_integrity(&self) -> Result<(), ForecastError> {
+        if self.seq_no == 0 && self.parent_revision_id.is_some() {
+            return Err(ForecastError::LifecycleInvariant(
+                "InitialForecast (seq_no=0) must have parent_revision_id = None",
+            ));
+        }
+        if self.seq_no > 0 && self.parent_revision_id.is_none() {
+            return Err(ForecastError::LifecycleInvariant(
+                "SubsequentRevision (seq_no>0) must have parent_revision_id = Some(...)",
+            ));
+        }
+        self.probability_distribution.validate()?;
+        let expected = self.compute_canonical_revision_id();
+        if self.revision_id != expected {
+            return Err(ForecastError::RevisionIdMismatch {
+                expected,
+                actual: self.revision_id.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_revision_id_parts(
+    forecast_id: &str,
+    seq_no: u32,
+    parent_revision_id: Option<&str>,
+    question_id: &str,
+    as_of_utc: &str,
+    p_indep: ProbClamped,
+    p_market: Option<ProbClamped>,
+    probability_distribution: &OutcomeDistribution,
+    evidence_handles: &[VerifiedEvidenceRef],
+    model_version: &str,
+    calibration_version: &str,
+    rationale_handle: &VerifiedEvidenceRef,
+    resolution_status: ResolutionStatusAtCutoff,
+) -> String {
+    let digest_input = serde_json::json!({
+        "forecast_id": forecast_id,
+        "seq_no": seq_no,
+        "parent_revision_id": parent_revision_id,
+        "question_id": question_id,
+        "as_of_utc": as_of_utc,
+        "p_indep": (p_indep.get() * 1e9).round() / 1e9,
+        "p_market": p_market.map(|p| (p.get() * 1e9).round() / 1e9),
+        "probability_distribution": probability_distribution.canonical_digest_json(),
+        "evidence_handles": evidence_handles,
+        "model_version": model_version,
+        "calibration_version": calibration_version,
+        "rationale_handle": rationale_handle,
+        "resolution_status": resolution_status,
+    });
+    let canonical = digest_input.to_string();
+    let hash = blake3::hash(canonical.as_bytes());
+    format!("rev_{}", hash.to_hex())
 }
 
 /// Unsealed builder ensuring `seq_no == 0 <=> parent_revision_id.is_none()` and deterministic `BLAKE3` ID.
@@ -250,24 +427,21 @@ impl UnsealedForecastRevision {
         self.evidence_handles.sort();
         self.evidence_handles.dedup();
 
-        let digest_input = serde_json::json!({
-            "forecast_id": &self.forecast_id,
-            "seq_no": self.seq_no,
-            "parent_revision_id": &self.parent_revision_id,
-            "question_id": &self.question_id,
-            "as_of_utc": &self.as_of_utc,
-            "p_indep": (self.p_indep.get() * 1e9).round() / 1e9,
-            "p_market": self.p_market.map(|p| (p.get() * 1e9).round() / 1e9),
-            "probability_distribution": &self.probability_distribution,
-            "evidence_handles": &self.evidence_handles,
-            "model_version": &self.model_version,
-            "calibration_version": &self.calibration_version,
-            "rationale_handle": &self.rationale_handle,
-            "resolution_status": &self.resolution_status,
-        });
-        let canonical = digest_input.to_string();
-        let hash = blake3::hash(canonical.as_bytes());
-        let revision_id = format!("rev_{}", hash.to_hex());
+        let revision_id = compute_revision_id_parts(
+            &self.forecast_id,
+            self.seq_no,
+            self.parent_revision_id.as_deref(),
+            &self.question_id,
+            &self.as_of_utc,
+            self.p_indep,
+            self.p_market,
+            &self.probability_distribution,
+            &self.evidence_handles,
+            &self.model_version,
+            &self.calibration_version,
+            &self.rationale_handle,
+            self.resolution_status,
+        );
 
         Ok(ForecastRevision {
             forecast_id: self.forecast_id,
@@ -347,5 +521,102 @@ mod tests {
                 .apply_and_verify(ProbClamped::new(0.50).expect("prob"))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn serde_enforces_prob_clamped_cdf_bounds_and_revision_integrity() {
+        // 1. ProbClamped rejects out-of-range values during serde deserialization
+        assert!(serde_json::from_str::<ProbClamped>("0.0").is_err());
+        assert!(serde_json::from_str::<ProbClamped>("1.0").is_err());
+        assert!(serde_json::from_str::<ProbClamped>("-0.1").is_err());
+        assert!(serde_json::from_str::<ProbClamped>("2.5").is_err());
+        let ok_p: ProbClamped = serde_json::from_str("0.42").expect("valid prob");
+        assert!((ok_p.get() - 0.42).abs() < 1e-12);
+
+        // 2. Cdf201 enforces [0, 1] bounds and 2..=201 length
+        assert!(
+            OutcomeDistribution::Cdf201 {
+                grid: vec![-0.01, 0.5, 1.0],
+                n_eff: 5.0,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            OutcomeDistribution::Cdf201 {
+                grid: vec![0.0, 0.5, 1.05],
+                n_eff: 5.0,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            OutcomeDistribution::Cdf201 {
+                grid: vec![0.5],
+                n_eff: 5.0,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            OutcomeDistribution::Cdf201 {
+                grid: vec![0.1, 0.4, 0.8, 0.99],
+                n_eff: 5.0,
+            }
+            .validate()
+            .is_ok()
+        );
+
+        // 3. ForecastRevision rejects tampered revision_id on serde deserialize and rounds distribution floats
+        let rat = VerifiedEvidenceRef::parse("[ev:89abcdef#rat0]").expect("rat");
+        let r1 = UnsealedForecastRevision {
+            forecast_id: "fc_hash".into(),
+            seq_no: 0,
+            parent_revision_id: None,
+            question_id: "q_hash".into(),
+            as_of_utc: "2026-11-27T10:00:00Z".into(),
+            p_indep: ProbClamped::new(0.35).expect("p"),
+            p_market: None,
+            probability_distribution: OutcomeDistribution::Binary {
+                p: ProbClamped::new(0.35).expect("p"),
+                n_eff: 10.0,
+            },
+            evidence_handles: vec![],
+            model_version: "m@v1".into(),
+            calibration_version: "cal-v1".into(),
+            rationale_handle: rat.clone(),
+            resolution_status: ResolutionStatusAtCutoff::Unresolved,
+        }
+        .seal()
+        .expect("seal r1");
+        let r2 = UnsealedForecastRevision {
+            forecast_id: "fc_hash".into(),
+            seq_no: 0,
+            parent_revision_id: None,
+            question_id: "q_hash".into(),
+            as_of_utc: "2026-11-27T10:00:00Z".into(),
+            p_indep: ProbClamped::new(0.35 + 1e-12).expect("p"),
+            p_market: None,
+            probability_distribution: OutcomeDistribution::Binary {
+                p: ProbClamped::new(0.35 + 1e-12).expect("p"),
+                n_eff: 10.0 + 1e-12,
+            },
+            evidence_handles: vec![],
+            model_version: "m@v1".into(),
+            calibration_version: "cal-v1".into(),
+            rationale_handle: rat,
+            resolution_status: ResolutionStatusAtCutoff::Unresolved,
+        }
+        .seal()
+        .expect("seal r2");
+        assert_eq!(r1.revision_id, r2.revision_id);
+
+        let mut val = serde_json::to_value(&r1).expect("to_value");
+        let ok_roundtrip: ForecastRevision =
+            serde_json::from_value(val.clone()).expect("valid roundtrip");
+        assert_eq!(ok_roundtrip.revision_id, r1.revision_id);
+
+        val["p_indep"] = serde_json::json!(0.91);
+        assert!(serde_json::from_value::<ForecastRevision>(val).is_err());
     }
 }

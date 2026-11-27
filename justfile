@@ -1,7 +1,7 @@
 # FrankenForecast (fcast) Developer Task Runner
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-export PATH := "/opt/homebrew/opt/rustup/bin:" + env_var("PATH")
+export PATH := if path_exists("/opt/homebrew/opt/rustup/bin") == "true" { "/opt/homebrew/opt/rustup/bin:" + env_var("PATH") } else { env_var("PATH") }
 
 default:
     @just --list

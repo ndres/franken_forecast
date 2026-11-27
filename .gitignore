@@ -8,6 +8,7 @@
 *.fsqlite-shm
 *.sock
 *.lock
+!Cargo.lock
 
 # Secrets & local environment overrides
 secrets.toml

@@ -82,6 +82,7 @@ fn live_installed_gemini_api_whoami_and_offline_dry_run() {
         api_revision: None,
         home_override: Some(tmp_home.path().to_path_buf()),
         no_keyring: true,
+        ..GeminiCliConfig::default()
     });
 
     let who = client.whoami().expect("whoami json");

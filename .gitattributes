@@ -1,0 +1,10 @@
+# Enforce LF line endings for byte-hash-locked prompt templates and source files.
+* text=auto eol=lf
+*.tmpl text eol=lf
+*.rs text eol=lf
+*.sql text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+justfile text eol=lf

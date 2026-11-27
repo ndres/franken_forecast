@@ -47,6 +47,20 @@ pub const fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+fn parse_digits_u32(slice: &str) -> Option<u32> {
+    if slice.is_empty() || !slice.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    slice.parse::<u32>().ok()
+}
+
+fn parse_digits_i64(slice: &str) -> Option<i64> {
+    if slice.is_empty() || !slice.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    slice.parse::<i64>().ok()
+}
+
 /// Parses a `YYYY-MM-DD` date prefix into exact days since `1970-01-01`.
 #[must_use]
 pub fn parse_ymd_days(ts: &str) -> Option<i64> {
@@ -57,9 +71,9 @@ pub fn parse_ymd_days(ts: &str) -> Option<i64> {
     if b[4] != b'-' || b[7] != b'-' {
         return None;
     }
-    let year: i64 = ts[0..4].parse().ok()?;
-    let month: u32 = ts[5..7].parse().ok()?;
-    let day: u32 = ts[8..10].parse().ok()?;
+    let year = parse_digits_i64(&ts[0..4])?;
+    let month = parse_digits_u32(&ts[5..7])?;
+    let day = parse_digits_u32(&ts[8..10])?;
     if !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
         return None;
     }
@@ -103,11 +117,11 @@ fn parse_utc_impl(s: &str, allow_minute_and_space: bool) -> Result<i64, TimePars
         return Err(err());
     }
 
-    let year: i64 = s[0..4].parse().map_err(|_| err())?;
-    let month: u32 = s[5..7].parse().map_err(|_| err())?;
-    let day: u32 = s[8..10].parse().map_err(|_| err())?;
-    let hour: u32 = s[11..13].parse().map_err(|_| err())?;
-    let minute: u32 = s[14..16].parse().map_err(|_| err())?;
+    let year = parse_digits_i64(&s[0..4]).ok_or_else(err)?;
+    let month = parse_digits_u32(&s[5..7]).ok_or_else(err)?;
+    let day = parse_digits_u32(&s[8..10]).ok_or_else(err)?;
+    let hour = parse_digits_u32(&s[11..13]).ok_or_else(err)?;
+    let minute = parse_digits_u32(&s[14..16]).ok_or_else(err)?;
 
     if !(1..=12).contains(&month)
         || day == 0
@@ -126,7 +140,7 @@ fn parse_utc_impl(s: &str, allow_minute_and_space: bool) -> Result<i64, TimePars
         if idx + 3 > b.len() {
             return Err(err());
         }
-        second = s[idx + 1..idx + 3].parse().map_err(|_| err())?;
+        second = parse_digits_u32(&s[idx + 1..idx + 3]).ok_or_else(err)?;
         if second > 59 {
             return Err(err());
         }
@@ -157,8 +171,8 @@ fn parse_utc_impl(s: &str, allow_minute_and_space: bool) -> Result<i64, TimePars
         0
     } else if idx + 6 == b.len() && (b[idx] == b'+' || b[idx] == b'-') && b[idx + 3] == b':' {
         let sign = if b[idx] == b'+' { 1_i64 } else { -1_i64 };
-        let oh: u32 = s[idx + 1..idx + 3].parse().map_err(|_| err())?;
-        let om: u32 = s[idx + 4..idx + 6].parse().map_err(|_| err())?;
+        let oh = parse_digits_u32(&s[idx + 1..idx + 3]).ok_or_else(err)?;
+        let om = parse_digits_u32(&s[idx + 4..idx + 6]).ok_or_else(err)?;
         if oh > 23 || om > 59 {
             return Err(err());
         }
@@ -201,6 +215,7 @@ mod tests {
         assert!(parse_rfc3339_epoch_ms("2026-11-01T10:00:00+25:00").is_err());
         assert!(parse_rfc3339_epoch_ms("2026-11-01T10:00:00+02:60").is_err());
         assert!(parse_rfc3339_epoch_ms("2026-é1-01T10:00:00Z").is_err());
+        assert!(parse_rfc3339_epoch_ms("2026-+1-+1T+0:+0:+0Z").is_err());
         assert!(parse_rfc3339_epoch_ms("2026-11-01 10:00").is_err());
         assert!(parse_utc_epoch_ms("2026-11-01 10:00").is_ok());
 

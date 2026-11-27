@@ -19,15 +19,16 @@ Usage:
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
-    let cmd = args.get(1).map(String::as_str).unwrap_or("help");
+    let cmd = args.get(1).map(String::as_str);
 
     let result = match cmd {
-        "init" => commands::run_init_cli(&args[2..]),
-        "verify-receipts" => commands::run_verify_receipts_cli(&args[2..]),
-        "gemini" => commands::run_gemini_cli(&args[2..]),
-        "demo" => commands::run_demo_cli(&args[2..]),
-        "forecast" => commands::run_forecast_cli(&args[2..]),
-        _ => Ok(USAGE.to_owned()),
+        None | Some("help" | "--help" | "-h") => Ok(USAGE.to_owned()),
+        Some("init") => commands::run_init_cli(&args[2..]),
+        Some("verify-receipts") => commands::run_verify_receipts_cli(&args[2..]),
+        Some("gemini") => commands::run_gemini_cli(&args[2..]),
+        Some("demo") => commands::run_demo_cli(&args[2..]),
+        Some("forecast") => commands::run_forecast_cli(&args[2..]),
+        Some(other) => Err(format!("unknown command: {other}\n\n{USAGE}").into()),
     };
 
     match result {

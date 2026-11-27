@@ -62,6 +62,25 @@ pub struct ConjugateBelief {
     pub beta: f64,
 }
 
+/// Named parameter struct for [`ConjugateBelief::stream_step_with`] avoiding 14 positional args.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StreamStepParams {
+    pub mu0: f64,
+    pub n0: f64,
+    pub domain: DomainKind,
+    pub geometry: HorizonGeometry,
+    pub dt_hours: f64,
+    pub t_rem_h: f64,
+    pub t_tot_h: f64,
+    pub surprise_ewma: f64,
+    pub direction: Direction,
+    pub delta_ll: f64,
+    pub diagnosticity: f64,
+    pub novelty: f64,
+    pub kappa_lr: f64,
+    pub eta_shock: f64,
+}
+
 impl ConjugateBelief {
     #[must_use]
     pub fn from_mean_precision(mu: ProbClamped, n_eff: f64) -> Self {
@@ -88,7 +107,29 @@ impl ConjugateBelief {
         (mu * (1.0 - mu)) / (self.n_eff() + 1.0)
     }
 
+    /// Named-parameter entry point for Two-Speed Tier-0 mean-precision updates (`HYP-05A..05C`).
+    #[must_use]
+    pub fn stream_step_with(self, p: &StreamStepParams) -> Self {
+        self.stream_step(
+            p.mu0,
+            p.n0,
+            p.domain,
+            p.geometry,
+            p.dt_hours,
+            p.t_rem_h,
+            p.t_tot_h,
+            p.surprise_ewma,
+            p.direction,
+            p.delta_ll,
+            p.diagnosticity,
+            p.novelty,
+            p.kappa_lr,
+            p.eta_shock,
+        )
+    }
+
     /// Two-Speed Tier-0 mean–precision step (`HYP-05A..05C`, `§11.1`).
+    /// Fails closed (returns `self` unchanged) if any numeric input is non-finite or `n0 < 0`.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn stream_step(
@@ -108,13 +149,38 @@ impl ConjugateBelief {
         kappa_lr: f64,
         eta_shock: f64,
     ) -> Self {
+        let all_finite = [
+            self.alpha,
+            self.beta,
+            mu0,
+            n0,
+            dt_hours,
+            t_rem_h,
+            t_tot_h,
+            surprise_ewma,
+            delta_ll,
+            diagnosticity,
+            novelty,
+            kappa_lr,
+            eta_shock,
+        ]
+        .iter()
+        .all(|v| v.is_finite());
+        if !all_finite || n0 < 0.0 || novelty < 0.0 || kappa_lr < 0.0 || eta_shock < 0.0 {
+            return self;
+        }
         let dt_safe = dt_hours.max(0.0);
         let tau_eff = effective_half_life_hours(domain, t_rem_h, surprise_ewma, 0.8);
         let gamma = 2.0_f64.powf(-dt_safe / tau_eff);
-        let mu_anc = anchor_mean(mu0, geometry, t_rem_h, t_tot_h);
+        let mu_anc = anchor_mean(
+            mu0.clamp(PROB_EPS, 1.0 - PROB_EPS),
+            geometry,
+            t_rem_h,
+            t_tot_h,
+        );
         let a_pre = gamma * self.alpha + (1.0 - gamma) * n0 * mu_anc;
         let b_pre = gamma * self.beta + (1.0 - gamma) * n0 * (1.0 - mu_anc);
-        let n_pre = a_pre + b_pre;
+        let n_pre = (a_pre + b_pre).max(PROB_EPS);
         let mu_pre = a_pre / n_pre;
 
         let (dl, diag) = match direction {
@@ -125,6 +191,9 @@ impl ConjugateBelief {
         let w_t = novelty * diag;
         let mu_post = sigmoid(logit(mu_pre) + kappa_lr * novelty * dl);
         let n_post = (n_pre / (1.0 + eta_shock * dl * dl)) + w_t;
+        if !mu_post.is_finite() || !n_post.is_finite() || n_post <= 0.0 {
+            return self;
+        }
         Self {
             alpha: n_post * mu_post,
             beta: n_post * (1.0 - mu_post),
@@ -443,6 +512,56 @@ mod tests {
         let p = ProbClamped::new(0.30).expect("p");
         assert_eq!(recalibrate_gated(p, 150, false, 1.2, 0.1, 0.2, 1.35), p);
         assert_ne!(recalibrate_gated(p, 150, true, 1.2, 0.1, 0.2, 1.35), p);
+    }
+
+    #[test]
+    fn stream_step_with_matches_positional_and_guards_nan() {
+        let base = ConjugateBelief {
+            alpha: 3.0,
+            beta: 7.0,
+        };
+        let params = StreamStepParams {
+            mu0: 0.30,
+            n0: 10.0,
+            domain: DomainKind::Geopolitics,
+            geometry: HorizonGeometry::PointInTime,
+            dt_hours: 12.0,
+            t_rem_h: 400.0,
+            t_tot_h: 800.0,
+            surprise_ewma: 0.2,
+            direction: Direction::Up,
+            delta_ll: 0.4,
+            diagnosticity: 0.7,
+            novelty: 0.9,
+            kappa_lr: 1.35,
+            eta_shock: 0.6,
+        };
+        let via_struct = base.stream_step_with(&params);
+        let via_pos = base.stream_step(
+            params.mu0,
+            params.n0,
+            params.domain,
+            params.geometry,
+            params.dt_hours,
+            params.t_rem_h,
+            params.t_tot_h,
+            params.surprise_ewma,
+            params.direction,
+            params.delta_ll,
+            params.diagnosticity,
+            params.novelty,
+            params.kappa_lr,
+            params.eta_shock,
+        );
+        assert_eq!(via_struct, via_pos);
+
+        let mut nan_params = params;
+        nan_params.delta_ll = f64::NAN;
+        assert_eq!(base.stream_step_with(&nan_params), base);
+
+        let mut neg_n0 = params;
+        neg_n0.n0 = -1.0;
+        assert_eq!(base.stream_step_with(&neg_n0), base);
     }
 
     proptest! {

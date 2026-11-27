@@ -112,21 +112,17 @@ fn jobs_priority_coalescing_lease_reclaim_dead_letter_and_budget() {
         ("freeze", "redteam", "shock")
     );
 
-    // 3. SIGKILL lease recovery reclaims expired RUNNING jobs
+    // 3. SIGKILL lease recovery reclaims expired RUNNING jobs and increments attempts (0 -> 1)
     let reclaimed = jobs.reclaim_expired_leases(2000).expect("reclaim");
     assert_eq!(reclaimed, 3);
 
-    // 4. Three consecutive failures quarantine job into DEAD_LETTER
+    // 4. Two further failures after the 1st lease-expiry attempt reach MAX_JOB_ATTEMPTS=3 -> DEAD_LETTER
     assert_eq!(
         jobs.record_failure(&j1.job_id, "err1").expect("f1"),
         "QUEUED"
     );
     assert_eq!(
         jobs.record_failure(&j1.job_id, "err2").expect("f2"),
-        "QUEUED"
-    );
-    assert_eq!(
-        jobs.record_failure(&j1.job_id, "err3").expect("f3"),
         "DEAD_LETTER"
     );
 
@@ -199,11 +195,143 @@ fn gate_02_forward_migration_0002_and_lossless_v1_to_v2_upcast() {
     assert!((p_indep - 0.30).abs() < 1e-12);
     assert!((shift - 0.0).abs() < 1e-12);
 
-    // Confirm _fcast_migrations recorded versions 1, 2, 4, and 5
+    // Confirm _fcast_migrations recorded versions 1, 2, 4, 5, and 6
     let cnt: i64 = conn
         .query_row("SELECT COUNT(*) FROM _fcast_migrations", [], |r| r.get(0))
         .expect("count");
-    assert_eq!(cnt, 4);
+    assert_eq!(cnt, 5);
+}
+
+#[test]
+fn review_hardening_poison_pill_reclaim_budget_spend_event_limit_and_tampered_revision() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = OperationalStore::open(dir.path().join("db/ops.fsqlite")).expect("open");
+    let jobs = DurableJobStore::new(&store);
+
+    // 1. Poison-pill job that repeatedly crashes / expires lease dead-letters after 3 expiries
+    let (jid, _) = jobs
+        .enqueue_idempotent(&JobSpec {
+            kind: "poison_pill".into(),
+            lane: "epistemic_heavy".into(),
+            priority: JobPriority::LiveShock,
+            deadline_utc: "2026-11-27T12:00:00Z".into(),
+            voi_log: 5.0,
+            idempotency_seed: "seed:poison_pill".into(),
+            est_cost_usd: 0.05,
+        })
+        .expect("enqueue");
+
+    for attempt_idx in 0..3 {
+        let base_epoch = 10_000 + attempt_idx * 100;
+        let running = jobs
+            .dequeue_next("2026-11-27", base_epoch)
+            .expect("dequeue")
+            .expect("job available");
+        assert_eq!(running.job_id, jid);
+        assert_eq!(running.attempts, attempt_idx);
+        let reclaimed = jobs
+            .reclaim_expired_leases(base_epoch + 1)
+            .expect("reclaim");
+        assert_eq!(reclaimed, 1);
+    }
+    // After 3 expired leases, job is quarantined in DEAD_LETTER and no longer dequeuable
+    assert!(
+        jobs.dequeue_next("2026-11-27", 20_000)
+            .expect("dequeue empty")
+            .is_none()
+    );
+    let (state, attempts): (String, i64) = store
+        .connection()
+        .query_row(
+            "SELECT state, attempts FROM fcast_jobs WHERE job_id = ?1",
+            [&jid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("read job");
+    assert_eq!(state, "DEAD_LETTER");
+    assert_eq!(attempts, 3);
+
+    // 2. Production budget ledger writer + reader roundtrip
+    let (spent0, cap0) = store.get_budget_status("2026-11-27").expect("budget0");
+    assert!((spent0 - 0.0).abs() < 1e-12);
+    assert!((cap0 - 5.0).abs() < 1e-12);
+    let (after1, cap1) = store
+        .record_budget_spend("2026-11-27", 1.25, 5.0)
+        .expect("spend1");
+    let (after2, cap2) = store
+        .record_budget_spend("2026-11-27", 2.50, 5.0)
+        .expect("spend2");
+    assert!((after1 - 1.25).abs() < 1e-12 && (cap1 - 5.0).abs() < 1e-12);
+    assert!((after2 - 3.75).abs() < 1e-12 && (cap2 - 5.0).abs() < 1e-12);
+    let (spent_final, cap_final) = store.get_budget_status("2026-11-27").expect("budget final");
+    assert!((spent_final - 3.75).abs() < 1e-12);
+    assert!((cap_final - 5.0).abs() < 1e-12);
+
+    // 3. poll_domain_events_limited enforces LIMIT
+    for i in 0..5 {
+        jobs.publish_domain_event(
+            "RevisionSealed",
+            "q_lim",
+            None,
+            "2026-11-27T10:00:00Z",
+            &format!("lim:{i}"),
+            "{}",
+        )
+        .expect("pub");
+    }
+    assert_eq!(
+        jobs.poll_domain_events_limited(0, 2).expect("lim 2").len(),
+        2
+    );
+    assert_eq!(
+        jobs.poll_domain_events_limited(0, 0).expect("lim 0").len(),
+        0
+    );
+
+    // 4. seal_forecast_revision recomputes & rejects tampered revision_id
+    let conn = store.connection();
+    conn.execute(
+        "INSERT INTO questions VALUES ('q_tamp', 'metaculus', 'Tamper Q', 'sha_t', 'point_in_time', '2026-11-01T00:00:00Z')",
+        [],
+    )
+    .expect("q");
+    conn.execute(
+        "INSERT INTO forecast_streams VALUES ('fc_tamp', 'q_tamp', 'live_tournament', NULL)",
+        [],
+    )
+    .expect("s");
+    conn.execute(
+        "INSERT INTO evidence_vault_index VALUES ('[ev:cafe#r0]', 'cafe', 'r0', '2026-11-01T00:00:00Z', 4, 0)",
+        [],
+    )
+    .expect("ev");
+    let mut rev = UnsealedForecastRevision {
+        forecast_id: "fc_tamp".into(),
+        seq_no: 0,
+        parent_revision_id: None,
+        question_id: "q_tamp".into(),
+        as_of_utc: "2026-11-01T01:00:00Z".into(),
+        p_indep: ProbClamped::new(0.42).expect("p"),
+        p_market: None,
+        probability_distribution: OutcomeDistribution::Binary {
+            p: ProbClamped::new(0.42).expect("p"),
+            n_eff: 6.0,
+        },
+        evidence_handles: vec![],
+        model_version: "m@v1".into(),
+        calibration_version: "cal-v1".into(),
+        rationale_handle: VerifiedEvidenceRef::parse("[ev:cafe#r0]").expect("rat"),
+        resolution_status: ResolutionStatusAtCutoff::Unresolved,
+    }
+    .seal()
+    .expect("seal");
+    rev.p_indep = ProbClamped::new(0.88).expect("mutated");
+    assert!(matches!(
+        store.seal_forecast_revision(&rev),
+        Err(StoreError::Core(
+            fcast_core::forecast::ForecastError::RevisionIdMismatch { .. }
+        ))
+    ));
 }
 
 #[test]
