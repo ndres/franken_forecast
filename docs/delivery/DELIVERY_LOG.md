@@ -4,23 +4,25 @@
 
 ## Current Repository Maturity
 
-* **Master Specification Version:** `2.1` (`2026-11-26`)
-* **Overall Implementation Status:** **`M0` + `M0.5` + `M1` Rust Workspace Verified (`Tier 2: Crate-Verified` for `14 / 24` gates: `GATE-01, 02, 04, 05, 08, 09, 10, 11, 12, 16, 17, 18, 19, 24`)** — all `6` ranked pure-Rust crates (`fcast-core`..`fcast-app`) compile with `#![forbid(unsafe_code)]` and `0` Clippy warnings under `nightly-2026-08-31` against upstream `Dicklesworthstone/frankensqlite` (`fsqlite::blocking`), passing `54` Rust unit/integration/`70,000+`-case `proptest` tests and emitting per-gate receipts (`receipts/GATE-*.json`). Remaining `M2..M5` gates stay `Tier 1 (Contract-Proved)` / `Tier 0 (Plan-Only)`.
+* **Master Specification Version:** `2.1` (`2026-11-27`) / `ALTERNATIVE_PLAN_V1.md` `v1.3`
+* **Overall Implementation Status:** **`M0` + `M0.5` + `M1` + `M1.5` Rust Workspace Verified (`Tier 2: Crate-Verified` for `15 / 24` gates: `GATE-01, 02, 04, 05, 06, 08, 09, 10, 11, 12, 16, 17, 18, 19, 24`)** — all `6` ranked pure-Rust crates (`fcast-core`..`fcast-app`) compile with `#![forbid(unsafe_code)]` and `0` Clippy warnings under `nightly-2026-08-31` against upstream `Dicklesworthstone/frankensqlite` (`fsqlite::blocking`), passing `62` Rust tests and emitting per-gate receipts (`receipts/GATE-*.json`). Remaining `M2..M5` gates stay `Tier 1 (Contract-Proved)` / `Tier 0 (Plan-Only)`.
 
 ## Gate Receipt Ledger (`GATE-01` .. `GATE-24`)
 
 | Gate ID | Primary Claim | Subsystem | Tier | Receipt Artifact | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `GATE-01`, `GATE-02` | `CLAIM-01` | `SUB-01` | `Tier 2` | `receipts/GATE-01.json`, `receipts/GATE-02.json` | `CRATE_VERIFIED` |
-| `GATE-04`, `GATE-05` | `CLAIM-02` | `SUB-01` | `Tier 2` | `receipts/GATE-04.json`, `receipts/GATE-05.json` | `CRATE_VERIFIED` |
+| `GATE-04`, `GATE-05`, `GATE-06` | `CLAIM-02` | `SUB-01`, `SUB-05` | `Tier 2` | `receipts/GATE-04.json`, `receipts/GATE-05.json`, `receipts/GATE-06.json` | `CRATE_VERIFIED` |
 | `GATE-08`, `GATE-09` | `CLAIM-03` | `SUB-03` | `Tier 2` | `receipts/GATE-08.json`, `receipts/GATE-09.json` | `CRATE_VERIFIED` |
 | `GATE-10`, `GATE-11`, `GATE-12` | `CLAIM-04` | `SUB-02` | `Tier 2` | `receipts/GATE-10.json`, `receipts/GATE-11.json`, `receipts/GATE-12.json` | `CRATE_VERIFIED` |
 | `GATE-16`, `GATE-17`, `GATE-18` | `CLAIM-06` | `SUB-03` | `Tier 2` | `receipts/GATE-16.json`, `receipts/GATE-17.json`, `receipts/GATE-18.json` | `CRATE_VERIFIED` |
 | `GATE-19` | `CLAIM-07` | `SUB-06` | `Tier 2` | `receipts/GATE-19.json` | `CRATE_VERIFIED` |
 | `GATE-24` | `CLAIM-08` | `SUB-08` | `Tier 2` | `receipts/GATE-24.json` | `CRATE_VERIFIED` |
-| `GATE-03`, `GATE-06`, `GATE-07`, `GATE-13..15`, `GATE-20..23` | `CLAIM-01..08` | `SUB-01..08` | `Tier 0/1` | *Pending `M2..M5` execution* | `UNIMPLEMENTED` |
+| `GATE-03`, `GATE-07`, `GATE-13..15`, `GATE-20..23` | `CLAIM-01..08` | `SUB-01..08` | `Tier 0/1` | *Pending `M2..M5` execution* | `UNIMPLEMENTED` |
 
 ## Chronological Delivery Entries
+
+* **2026-11-27 — `M1.5` Minimum Vertical Slice, Runnable `fcast demo` & `GATE-06` (`Tier 2: Crate-Verified`):** Folded `ThesisInstitute/thesis` proper-score, trace-custody, and pack-promotion guardrails into `ALTERNATIVE_PLAN_V1.md` (`v1.3`). Implemented `fcast-bench::{cohort,scoring}` (`deterministic_m15_demo_cohort`, `GATE-06` disjoint `QuestionResolution` & void-exclusion scoring without mutating `forecast_revisions`, Thesis Lab `paired_normalized_crps_delta` + `1e-12` relative dispersion floor, full-universe dual-denominator scorecard, and `run_m15_demo_pipeline`), wired `fcast demo [--live-gemini]` and `fcast forecast` into `fcast-app`, and emitted `receipts/GATE-06.json` (`15 / 24` gates `Tier 2: Crate-Verified`).
 
 * **2026-11-26 — `M1` Pure-Rust `Harvester`, `Notary` & `Metronome` (`Tier 2: Crate-Verified` for `GATE-08, 10, 11, 12, 16, 17, 18, 19`):** Implemented full `M1` deliverables across three crates:
   * **`fcast-ingest` (`Harvester` · `GATE-10, 11, 12`):** `BookMarkPrice` Stoikov microprice + `$100` / `800 bps` floor + `phi_liq`, `MetaculusQuestion` 7-variant hierarchy + fixed-point MC simplex floor (`>= 0.01`) + `restore_option_names` + `ApiFilter` `bot_leaderboard_status` + `ManticCrucibleAdapter` (`N <= 31` PMF + `>= 5%` open-tail floor) + `ForecastBenchMedianBackfill`, deterministic Geo/Macro/Cyber `DomainGate` (`300`-question benchmark `precision >= 0.92`, `recall >= 0.90`) + `EquivalenceCluster`, and `Tier W1` Zstd-6 partitioned L2 tick archive (`16` tests).

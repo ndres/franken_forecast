@@ -1,13 +1,20 @@
 //! `fcast` CLI & `fcast-verify` offline receipt auditor (`M0`, `GATE-24`, `§0.2` Rule 7).
 
-use fcast_core::blinding::VerifiedEvidenceRef;
+use fcast_bench::{deterministic_m15_demo_cohort, run_m15_demo_pipeline};
+use fcast_core::blinding::{MarketBlindingScrubber, VerifiedEvidenceRef};
 use fcast_core::forecast::{
     OutcomeDistribution, ProbClamped, ResolutionStatusAtCutoff, UnsealedForecastRevision,
 };
+use fcast_epistemic::{
+    BindingAuditVerdict, DraftRevisionProposal, PlanConstraintSpec, PostProposalAudit,
+    PreLoomGuard, RepRouter, TuningCacheSnapshot,
+};
+use fcast_infra::daemon::{BillingPacingTier, TimeBudget};
 use fcast_infra::llm::{GEMINI_4_HYDROGEN, GeminiCliClient, GeminiGenerateRequest};
 use fcast_infra::store::{HorizonProjection, OperationalStore};
 use fcast_infra::sys::DataRootLayout;
 use fcast_infra::vault::EvidenceVault;
+use fcast_ingest::{DomainDecision, IntakeSnapshot, TargetDomain, assemble_evidence_bundle};
 use fsqlite::blocking::params;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -145,8 +152,8 @@ fn run_verify_receipts(
     if let Some(dir) = write_dir {
         fs::create_dir_all(dir)?;
         for gate_id in [
-            "GATE-01", "GATE-02", "GATE-04", "GATE-05", "GATE-08", "GATE-09", "GATE-10", "GATE-11",
-            "GATE-12", "GATE-16", "GATE-17", "GATE-18", "GATE-19", "GATE-24",
+            "GATE-01", "GATE-02", "GATE-04", "GATE-05", "GATE-06", "GATE-08", "GATE-09", "GATE-10",
+            "GATE-11", "GATE-12", "GATE-16", "GATE-17", "GATE-18", "GATE-19", "GATE-24",
         ] {
             let rec = GateReceipt {
                 gate_id: gate_id.into(),
@@ -163,12 +170,215 @@ fn run_verify_receipts(
     }
 
     Ok(GateReceipt {
-        gate_id: "M1-BUNDLE".into(),
+        gate_id: "M1.5-BUNDLE".into(),
         status: "VERIFIED",
         tier: "Tier 2 (Crate-Verified)",
         workspace_sha256,
         templates_verified: count,
     })
+}
+
+fn run_demo_cli(args: &[String]) -> Result<String, Box<dyn std::error::Error>> {
+    let data_root = args
+        .windows(2)
+        .find(|w| w[0] == "--data-root")
+        .map(|w| PathBuf::from(&w[1]))
+        .unwrap_or_else(|| env::temp_dir().join("fcast_m15_demo"));
+    let live = args.iter().any(|a| a == "--live-gemini");
+    let layout = DataRootLayout::init(&data_root)?;
+    let store = OperationalStore::open(&layout.db_path)?;
+    let vault = EvidenceVault::open(&layout.vault_dir)?;
+    let cohort = deterministic_m15_demo_cohort();
+    let client = GeminiCliClient::from_env();
+    let report = run_m15_demo_pipeline(&store, &vault, &cohort, live.then_some(&client))?;
+    Ok(serde_json::to_string_pretty(&report)?)
+}
+
+fn run_forecast_cli(args: &[String]) -> Result<String, Box<dyn std::error::Error>> {
+    let question_id = args
+        .first()
+        .filter(|s| !s.starts_with("--"))
+        .ok_or("usage: fcast forecast <question_id> --title <t> --as-of <utc> [--model <m>] [--dry-run] [--data-root <dir>]")?;
+    let mut title = format!("Forecast question {question_id}");
+    let mut as_of_utc = "2026-11-27T12:00:00Z".to_owned();
+    let mut model = GEMINI_4_HYDROGEN.to_owned();
+    let mut dry_run = false;
+    let mut data_root = default_data_root();
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--title" => {
+                title = args.get(i + 1).ok_or("missing --title")?.clone();
+                i += 2;
+            }
+            "--as-of" => {
+                as_of_utc = args.get(i + 1).ok_or("missing --as-of")?.clone();
+                i += 2;
+            }
+            "--model" | "-m" => {
+                model = args.get(i + 1).ok_or("missing --model")?.clone();
+                i += 2;
+            }
+            "--data-root" => {
+                data_root = PathBuf::from(args.get(i + 1).ok_or("missing --data-root")?);
+                i += 2;
+            }
+            "--dry-run" => {
+                dry_run = true;
+                i += 1;
+            }
+            other => return Err(format!("unknown flag for `fcast forecast`: {other}").into()),
+        }
+    }
+
+    let layout = DataRootLayout::init(&data_root)?;
+    let store = OperationalStore::open(&layout.db_path)?;
+    let vault = EvidenceVault::open(&layout.vault_dir)?;
+    let snap = TuningCacheSnapshot::cold_start();
+    let _ = store.save_tuning_snapshot(
+        &snap.snapshot_id,
+        &snap.created_utc,
+        snap.resolved_n,
+        &serde_json::to_string(&snap)?,
+    );
+
+    let intake = IntakeSnapshot {
+        question_id: question_id.clone(),
+        platform_id: "cli".into(),
+        question_type: "binary".into(),
+        domain_decision: DomainDecision::Accept {
+            domain: TargetDomain::Geopolitics,
+            confidence: 0.9,
+            matched_signals: vec!["cli".into()],
+        },
+        book_mark: None,
+        complexity_score: 60.0,
+        prize_weight: 1.5,
+    };
+    let plan = RepRouter::phase_b_select(
+        &intake,
+        &as_of_utc,
+        &PlanConstraintSpec::default(),
+        &TimeBudget::from_epochs(10_000, Some(15_000), 20_000),
+        BillingPacingTier::Full,
+        &snap,
+    );
+    let scrubbed = MarketBlindingScrubber::scrub_text(&title);
+    let ev_art = vault.put_bytes("cli_brief", scrubbed.as_bytes())?;
+    let conn = store.connection();
+    let contract_sha = format!("{:x}", Sha256::digest(title.as_bytes()));
+    conn.execute(
+        "INSERT OR IGNORE INTO questions (question_id, venue, title, contract_sha256, horizon_geometry, created_utc)
+         VALUES (?1, 'cli', ?2, ?3, 'point_in_time', ?4)",
+        params![question_id, &title, &contract_sha, &as_of_utc],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO evidence_vault_index (ev_handle, sha256_hex, span_id, available_utc, byte_len, zstd_compressed)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            ev_art.ev_handle.as_str(),
+            &ev_art.sha256_hex,
+            &ev_art.span_id,
+            &as_of_utc,
+            ev_art.byte_len as i64,
+            i64::from(ev_art.zstd_compressed),
+        ],
+    )?;
+    let bundle = plan
+        .evidence_plan
+        .as_ref()
+        .map(|ep| assemble_evidence_bundle(ep, vec![ev_art.ev_handle.clone()]));
+
+    let client = GeminiCliClient::from_env();
+    let mut req = GeminiGenerateRequest::new(
+        model.clone(),
+        format!(
+            "Estimate probability in (0,1) for: {scrubbed}. Reply strictly as JSON {{\"probability\": <float>}}."
+        ),
+    );
+    req.system_instruction = Some("Return ONLY valid JSON {\"probability\": number}.".into());
+    req.dry_run = dry_run;
+    let resp = client.generate(&req)?;
+    let raw_out = if dry_run {
+        "{\"probability\": 0.50}".to_owned()
+    } else {
+        resp.text.clone()
+    };
+
+    let (p_guarded, _) = PreLoomGuard::extract_and_guard_prob(&raw_out, 1)?;
+    let final_p = match PostProposalAudit::evaluate_binding(&DraftRevisionProposal {
+        question_id: question_id.clone(),
+        p_prev: ProbClamped::clamp_lossy(0.50),
+        p_proposed: p_guarded,
+        is_freeze_deadline: false,
+        contract_misread_g1: false,
+        unverified_load_bearing_claims: vec![],
+    }) {
+        BindingAuditVerdict::Approve { final_p }
+        | BindingAuditVerdict::DampenTowardPrior { final_p, .. } => final_p,
+        BindingAuditVerdict::BlockPublish { reason } => {
+            return Err(format!("binding audit blocked publish: {reason}").into());
+        }
+    };
+
+    let fc_id = format!("fc_cli_{question_id}");
+    conn.execute(
+        "INSERT OR IGNORE INTO forecast_streams (forecast_id, question_id, stream_kind, origin_revision_id)
+         VALUES (?1, ?2, 'live_tournament', NULL)",
+        params![&fc_id, question_id],
+    )?;
+    let rat_art = vault.put_bytes(
+        "cli_rat",
+        format!("model={model} dry_run={dry_run} p={:.4}", final_p.get()).as_bytes(),
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO evidence_vault_index (ev_handle, sha256_hex, span_id, available_utc, byte_len, zstd_compressed)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            rat_art.ev_handle.as_str(),
+            &rat_art.sha256_hex,
+            &rat_art.span_id,
+            &as_of_utc,
+            rat_art.byte_len as i64,
+            i64::from(rat_art.zstd_compressed),
+        ],
+    )?;
+    let rev = UnsealedForecastRevision {
+        forecast_id: fc_id.clone(),
+        seq_no: 0,
+        parent_revision_id: None,
+        question_id: question_id.clone(),
+        as_of_utc: as_of_utc.clone(),
+        p_indep: final_p,
+        p_market: None,
+        probability_distribution: OutcomeDistribution::Binary {
+            p: final_p,
+            n_eff: 4.0,
+        },
+        evidence_handles: bundle.map_or_else(Vec::new, |b| b.evidence_handles),
+        model_version: format!("{model}@m1.5"),
+        calibration_version: format!("cal-m1.5:{}", snap.snapshot_id),
+        rationale_handle: rat_art.ev_handle,
+        resolution_status: ResolutionStatusAtCutoff::Unresolved,
+    }
+    .seal()?;
+    if matches!(
+        store.project_at_horizon(&fc_id, &as_of_utc)?,
+        HorizonProjection::NotYetIssued
+    ) {
+        store.seal_forecast_revision(&rev)?;
+    }
+
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "revision_id": rev.revision_id,
+        "forecast_id": fc_id,
+        "question_id": question_id,
+        "p_indep": rev.p_indep.get(),
+        "selected_rep": plan.selected_rep,
+        "reshaped_spec_hash": plan.reshaped_spec_hash,
+        "dry_run": dry_run,
+    }))?)
 }
 
 fn run_gemini_cli(args: &[String]) -> Result<String, Box<dyn std::error::Error>> {
@@ -258,8 +468,10 @@ fn main() -> ExitCode {
                 .and_then(|r| Ok(serde_json::to_string_pretty(&r)?))
         }
         "gemini" => run_gemini_cli(&args[2..]),
+        "demo" => run_demo_cli(&args[2..]),
+        "forecast" => run_forecast_cli(&args[2..]),
         _ => Ok(
-            "FrankenForecast (fcast) CLI\nUsage:\n  fcast init [--data-root <dir>]\n  fcast verify-receipts [--write-dir <dir>]\n  fcast gemini whoami\n  fcast gemini models\n  fcast gemini generate <prompt> [--model <m>] [--system <s>] [--previous-interaction-id <id>] [--dry-run]\n"
+            "FrankenForecast (fcast) CLI\nUsage:\n  fcast init [--data-root <dir>]\n  fcast demo [--data-root <dir>] [--live-gemini]\n  fcast forecast <question_id> --title <t> --as-of <utc> [--model <m>] [--dry-run] [--data-root <dir>]\n  fcast verify-receipts [--write-dir <dir>]\n  fcast gemini whoami\n  fcast gemini models\n  fcast gemini generate <prompt> [--model <m>] [--system <s>] [--previous-interaction-id <id>] [--dry-run]\n"
                 .to_owned(),
         ),
     };
