@@ -9,7 +9,9 @@
 use crate::verify::{
     ExtractedProbability, ValueExtractionLadder, VerifyError, apply_publish_floor,
 };
+use fcast_core::coherence::{CoherenceError, ElicitationFormat, guard_quantile_promotion};
 use fcast_core::forecast::{ProbClamped, logit, sigmoid};
+use fcast_ingest::ContextCompleteness;
 use serde::{Deserialize, Serialize};
 
 /// `FR6a` Stateless extraction & publish-floor guard running strictly BEFORE `Loom`.
@@ -23,12 +25,41 @@ impl PreLoomGuard {
         raw_llm_output: &str,
         survivors: usize,
     ) -> Result<(ProbClamped, ExtractedProbability), VerifyError> {
+        Self::extract_and_guard_with_completeness(
+            raw_llm_output,
+            survivors,
+            &ContextCompleteness::Complete,
+        )
+    }
+
+    /// Completeness-aware extraction guard (`elicitation-measurement` Finding #5):
+    /// forces `THIN_PUBLISH_FLOOR` (`[0.05, 0.95]`) whenever `completeness` is `Partial`
+    /// even if multiple ensemble survivors agreed on incomplete primary text.
+    pub fn extract_and_guard_with_completeness(
+        raw_llm_output: &str,
+        survivors: usize,
+        completeness: &ContextCompleteness,
+    ) -> Result<(ProbClamped, ExtractedProbability), VerifyError> {
         let extracted = ValueExtractionLadder::extract_binary_probability::<
             fn(&str) -> Result<String, String>,
         >(raw_llm_output, None)?;
-        let guarded = apply_publish_floor(extracted.probability, survivors);
+        let effective_survivors = if completeness.is_complete() {
+            survivors
+        } else {
+            1
+        };
+        let guarded = apply_publish_floor(extracted.probability, effective_survivors);
         let prob = ProbClamped::clamp_lossy(guarded);
         Ok((prob, extracted))
+    }
+
+    /// Fail-closed guard rejecting silent downgrade from native elicited quantiles to a
+    /// 3-point interval transform (`elicitation-measurement` Finding #4 / `PR #78`).
+    pub fn validate_quantile_promotion(
+        elicited: ElicitationFormat,
+        published: ElicitationFormat,
+    ) -> Result<(), CoherenceError> {
+        guard_quantile_promotion(elicited, published)
     }
 }
 
@@ -76,13 +107,11 @@ impl PostProposalAudit {
     }
 
     /// Evaluates a `DraftRevisionProposal` and returns a binding verdict (`Approve`/`Dampen`/`Block`).
+    ///
+    /// Confirmed `G1` contract misreads and unverified load-bearing claims ALWAYS block publication,
+    /// even when `|dlogit| < 0.35` (fail-closed against salami-slicing).
     #[must_use]
     pub fn evaluate_binding(proposal: &DraftRevisionProposal) -> BindingAuditVerdict {
-        if !Self::requires_red_team(proposal) {
-            return BindingAuditVerdict::Approve {
-                final_p: proposal.p_proposed,
-            };
-        }
         if proposal.contract_misread_g1 {
             return BindingAuditVerdict::BlockPublish {
                 reason: "BINDING_G1_CONTRACT_MISREAD".into(),
@@ -94,6 +123,11 @@ impl PostProposalAudit {
                     "UNVERIFIED_LOAD_BEARING_CLAIMS:{}",
                     proposal.unverified_load_bearing_claims.join(",")
                 ),
+            };
+        }
+        if !Self::requires_red_team(proposal) {
+            return BindingAuditVerdict::Approve {
+                final_p: proposal.p_proposed,
             };
         }
         // Extreme jump (|dlogit| >= 1.50) without G1 is dampened 50% in logit space to curb overreaction.

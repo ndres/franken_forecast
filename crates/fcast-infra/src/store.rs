@@ -98,6 +98,7 @@ impl OperationalStore {
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA foreign_keys = ON;
+             PRAGMA busy_timeout = 5000;
              PRAGMA wal_autocheckpoint = 1000;",
         )?;
 
@@ -128,6 +129,17 @@ impl OperationalStore {
                 "2026-11-26T00:00:00Z"
             ],
         )?;
+        let sha5 = format!("{:x}", Sha256::digest(MIGRATION_0005_SQL.as_bytes()));
+        self.conn.execute(
+            "INSERT OR IGNORE INTO _fcast_migrations (version, name, sha256_hex, applied_utc)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                5_i64,
+                "0005_tuning_cache_snapshots",
+                sha5,
+                "2026-11-26T00:00:00Z"
+            ],
+        )?;
         Ok(())
     }
 
@@ -148,8 +160,14 @@ impl OperationalStore {
         if !status.eq_ignore_ascii_case("ok") {
             return Err(StoreError::IntegrityFailed(status));
         }
-        self.conn
-            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE);", [], |r| r.get(0))?;
+        if busy != 0 {
+            return Err(StoreError::IntegrityFailed(format!(
+                "WAL checkpoint busy ({busy}); refusing inconsistent backup"
+            )));
+        }
         let raw = fs::read(&self.db_path)?;
         let compressed = zstd::bulk::compress(&raw, 9)?;
         let backup_path = backup_path.as_ref().to_path_buf();
@@ -166,70 +184,11 @@ impl OperationalStore {
         })
     }
 
-    /// Seals an immutable `ForecastRevision` while enforcing canonical epoch-ms `available_utc <= as_of_utc`
-    /// (`INV-01`, `INV-03`), parent revision chain integrity & timestamp monotonicity,
-    /// and emitting a transactional `RevisionSealed` event into `domain_events` (`§13.2`).
+    /// Seals an immutable `ForecastRevision` atomically inside `BEGIN IMMEDIATE` while enforcing
+    /// canonical epoch-ms `available_utc <= as_of_utc` (`INV-01`, `INV-03`), parent revision chain
+    /// integrity & timestamp monotonicity, and emitting a transactional `RevisionSealed` event (`§13.2`).
     pub fn seal_forecast_revision(&self, rev: &ForecastRevision) -> Result<(), StoreError> {
         let rev_ms = parse_rfc3339_epoch_ms(&rev.as_of_utc)?;
-
-        if let Some(parent_id) = &rev.parent_revision_id {
-            let parent_row: Option<(String, i64, String)> = self
-                .conn
-                .query_row(
-                    "SELECT forecast_id, seq_no, as_of_utc FROM forecast_revisions WHERE revision_id = ?1",
-                    params![parent_id],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                )
-                .optional()?;
-            let (p_fc_id, p_seq, p_as_of) = parent_row.ok_or_else(|| {
-                StoreError::ChainInvariantViolation(format!("missing parent revision {parent_id}"))
-            })?;
-            if p_fc_id != rev.forecast_id {
-                return Err(StoreError::ChainInvariantViolation(format!(
-                    "parent {parent_id} belongs to forecast {p_fc_id}, not {}",
-                    rev.forecast_id
-                )));
-            }
-            if p_seq + 1 != i64::from(rev.seq_no) {
-                return Err(StoreError::ChainInvariantViolation(format!(
-                    "non-contiguous seq_no: parent={p_seq}, child={}",
-                    rev.seq_no
-                )));
-            }
-            let p_ms = parse_rfc3339_epoch_ms(&p_as_of)?;
-            if rev_ms < p_ms {
-                return Err(StoreError::ChainInvariantViolation(format!(
-                    "non-monotonic as_of_utc: child={} < parent={p_as_of}",
-                    rev.as_of_utc
-                )));
-            }
-        }
-
-        for handle in rev
-            .evidence_handles
-            .iter()
-            .chain(std::iter::once(&rev.rationale_handle))
-        {
-            let avail: Option<String> = self
-                .conn
-                .query_row(
-                    "SELECT available_utc FROM evidence_vault_index WHERE ev_handle = ?1",
-                    params![handle.as_str()],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            let avail = avail
-                .ok_or_else(|| StoreError::MissingEvidenceHandle(handle.as_str().to_owned()))?;
-            let avail_ms = parse_rfc3339_epoch_ms(&avail)?;
-            if avail_ms > rev_ms {
-                return Err(StoreError::TemporalFenceViolation {
-                    handle: handle.as_str().to_owned(),
-                    available_utc: avail,
-                    as_of_utc: rev.as_of_utc.clone(),
-                });
-            }
-        }
-
         let dist_json = serde_json::to_string(&rev.probability_distribution)?;
         let ev_json = serde_json::to_string(&rev.evidence_handles)?;
         let status_str = match rev.resolution_status {
@@ -241,6 +200,66 @@ impl OperationalStore {
 
         self.conn.execute_batch("BEGIN IMMEDIATE;")?;
         let res = (|| -> Result<(), StoreError> {
+            if let Some(parent_id) = &rev.parent_revision_id {
+                let parent_row: Option<(String, i64, String)> = self
+                    .conn
+                    .query_row(
+                        "SELECT forecast_id, seq_no, as_of_utc FROM forecast_revisions WHERE revision_id = ?1",
+                        params![parent_id],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )
+                    .optional()?;
+                let (p_fc_id, p_seq, p_as_of) = parent_row.ok_or_else(|| {
+                    StoreError::ChainInvariantViolation(format!(
+                        "missing parent revision {parent_id}"
+                    ))
+                })?;
+                if p_fc_id != rev.forecast_id {
+                    return Err(StoreError::ChainInvariantViolation(format!(
+                        "parent {parent_id} belongs to forecast {p_fc_id}, not {}",
+                        rev.forecast_id
+                    )));
+                }
+                if p_seq + 1 != i64::from(rev.seq_no) {
+                    return Err(StoreError::ChainInvariantViolation(format!(
+                        "non-contiguous seq_no: parent={p_seq}, child={}",
+                        rev.seq_no
+                    )));
+                }
+                let p_ms = parse_rfc3339_epoch_ms(&p_as_of)?;
+                if rev_ms < p_ms {
+                    return Err(StoreError::ChainInvariantViolation(format!(
+                        "non-monotonic as_of_utc: child={} < parent={p_as_of}",
+                        rev.as_of_utc
+                    )));
+                }
+            }
+
+            for handle in rev
+                .evidence_handles
+                .iter()
+                .chain(std::iter::once(&rev.rationale_handle))
+            {
+                let avail: Option<String> = self
+                    .conn
+                    .query_row(
+                        "SELECT available_utc FROM evidence_vault_index WHERE ev_handle = ?1",
+                        params![handle.as_str()],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let avail = avail
+                    .ok_or_else(|| StoreError::MissingEvidenceHandle(handle.as_str().to_owned()))?;
+                let avail_ms = parse_rfc3339_epoch_ms(&avail)?;
+                if avail_ms > rev_ms {
+                    return Err(StoreError::TemporalFenceViolation {
+                        handle: handle.as_str().to_owned(),
+                        available_utc: avail,
+                        as_of_utc: rev.as_of_utc.clone(),
+                    });
+                }
+            }
+
             self.conn.execute(
                 "INSERT INTO forecast_revisions (
                     revision_id, forecast_id, seq_no, parent_revision_id, question_id,
@@ -582,14 +601,18 @@ impl OperationalStore {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut best: Option<(i64, (String, String, usize, String))> = None;
+        type SnapshotRow = (String, String, usize, String);
+        let mut best: Option<(i64, String, SnapshotRow)> = None;
         for (sid, created, rn, payload) in rows {
             let ms = parse_rfc3339_epoch_ms(&created)?;
-            if best.as_ref().is_none_or(|(b_ms, _)| ms >= *b_ms) {
-                best = Some((ms, (sid, created, rn.max(0) as usize, payload)));
+            if best
+                .as_ref()
+                .is_none_or(|(b_ms, b_sid, _)| (ms, sid.as_str()) > (*b_ms, b_sid.as_str()))
+            {
+                best = Some((ms, sid.clone(), (sid, created, rn.max(0) as usize, payload)));
             }
         }
-        Ok(best.map(|(_, row)| row))
+        Ok(best.map(|(_, _, row)| row))
     }
 }
 

@@ -77,8 +77,12 @@ pub fn compute_history_step_scale(history: &[f64]) -> Option<f64> {
 }
 
 /// Exact closed-form CRPS for a Gaussian predictive distribution `N(mu, sigma^2)` at outcome `y`.
+/// Returns `f64::NAN` on non-finite inputs or `sigma <= 0.0` (never silently coerces `NaN` sigma).
 #[must_use]
 pub fn gaussian_crps(mu: f64, sigma: f64, y: f64) -> f64 {
+    if !mu.is_finite() || !sigma.is_finite() || !y.is_finite() || sigma <= 0.0 {
+        return f64::NAN;
+    }
     let s = sigma.max(1e-9);
     let z = (y - mu) / s;
     let pdf = (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt();
@@ -99,7 +103,8 @@ fn erf_approx(x: f64) -> f64 {
 }
 
 /// Strictly proper Thesis Lab `pairedNormalizedCrpsDelta` against a pre-cutoff persistence
-/// baseline (`< 0.0` beats persistence). Returns `None` when pre-cutoff dispersion is unusable.
+/// baseline (`< 0.0` beats persistence). Returns `None` when inputs are non-finite,
+/// `pred_sigma <= 0.0`, or pre-cutoff dispersion is unusable.
 #[must_use]
 pub fn paired_normalized_crps_delta(
     pred_mu: f64,
@@ -107,11 +112,15 @@ pub fn paired_normalized_crps_delta(
     actual: f64,
     pre_cutoff_history: &[f64],
 ) -> Option<f64> {
+    if !pred_mu.is_finite() || !pred_sigma.is_finite() || !actual.is_finite() || pred_sigma <= 0.0 {
+        return None;
+    }
     let scale = compute_history_step_scale(pre_cutoff_history)?;
     let last_print = *pre_cutoff_history.last()?;
     let crps_model = gaussian_crps(pred_mu, pred_sigma, actual) / scale;
     let crps_persist = gaussian_crps(last_print, scale, actual) / scale;
-    Some(crps_model - crps_persist)
+    let delta = crps_model - crps_persist;
+    delta.is_finite().then_some(delta)
 }
 
 /// Adaptive equal-mass 2-bin ECE over `(p, y)` pairs.
@@ -138,6 +147,206 @@ pub fn adaptive_ece(pairs: &[(f64, f64)]) -> f64 {
             (bn / n_tot) * (mean_p - mean_y).abs()
         })
         .sum()
+}
+
+/// Release-date clustered bootstrap 95% confidence interval (`Kalshi` / Thesis Pass 2 Upgrade #3).
+///
+/// Resamples entire release-date clusters (not individual correlated macro prints) so simultaneous
+/// releases (e.g., Headline + Core CPI, U-3 + Payrolls) do not artificially narrow confidence bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ClusteredBootstrapCi {
+    pub mean: f64,
+    pub ci_lo_95: f64,
+    pub ci_hi_95: f64,
+    pub n_clusters: usize,
+}
+
+/// Computes a deterministic seeded release-date clustered bootstrap 95% CI over `(release_date, delta)` pairs.
+#[must_use]
+pub fn release_date_clustered_bootstrap_ci(
+    items: &[(&str, f64)],
+    n_resamples: usize,
+    seed: u64,
+) -> Option<ClusteredBootstrapCi> {
+    if items.is_empty() || n_resamples == 0 || items.iter().any(|(_, v)| !v.is_finite()) {
+        return None;
+    }
+    let mut by_date: std::collections::BTreeMap<&str, Vec<f64>> = std::collections::BTreeMap::new();
+    for &(date, val) in items {
+        by_date.entry(date).or_default().push(val);
+    }
+    let clusters: Vec<Vec<f64>> = by_date.into_values().collect();
+    let k = clusters.len();
+    let total_sum: f64 = items.iter().map(|(_, v)| *v).sum();
+    let observed_mean = total_sum / (items.len() as f64);
+
+    let mut state = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut next_u64 = || -> u64 {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+
+    let mut boot_means = Vec::with_capacity(n_resamples);
+    for _ in 0..n_resamples {
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+        for _ in 0..k {
+            let idx = (next_u64() as usize) % k;
+            for &v in &clusters[idx] {
+                sum += v;
+                count += 1;
+            }
+        }
+        boot_means.push(sum / (count.max(1) as f64));
+    }
+    boot_means.sort_by(f64::total_cmp);
+    let lo_idx = ((0.025 * ((n_resamples - 1) as f64)).round() as usize).min(n_resamples - 1);
+    let hi_idx = ((0.975 * ((n_resamples - 1) as f64)).round() as usize).min(n_resamples - 1);
+    Some(ClusteredBootstrapCi {
+        mean: observed_mean,
+        ci_lo_95: boot_means[lo_idx],
+        ci_hi_95: boot_means[hi_idx],
+        n_clusters: k,
+    })
+}
+
+/// Exact two-sided `2^n` sign-flip randomization p-value over cluster deltas (`n <= 16`),
+/// switching to `10,000` seeded Monte Carlo sign flips when `n > 16` (`Kalshi` / Thesis Pass 2 Upgrade #3).
+#[must_use]
+pub fn exact_sign_flip_p_value(cluster_deltas: &[f64]) -> Option<f64> {
+    let n = cluster_deltas.len();
+    if n == 0 || cluster_deltas.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let obs_abs = cluster_deltas.iter().sum::<f64>().abs();
+    let thresh = obs_abs * (1.0 - 1e-12);
+    if n <= 16 {
+        let total = 1_u32 << n;
+        let mut ge_count = 0_u32;
+        for mask in 0..total {
+            let mut sum = 0.0_f64;
+            for (bit, &v) in cluster_deltas.iter().enumerate() {
+                if ((mask >> bit) & 1) == 1 {
+                    sum += v;
+                } else {
+                    sum -= v;
+                }
+            }
+            if sum.abs() >= thresh {
+                ge_count += 1;
+            }
+        }
+        Some(f64::from(ge_count) / f64::from(total))
+    } else {
+        let draws = 10_000_u32;
+        let mut state = 0xD1B5_4A32_D192_ED03_u64;
+        let mut ge_count = 0_u32;
+        for _ in 0..draws {
+            let mut sum = 0.0_f64;
+            for &v in cluster_deltas {
+                state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = state;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^= z >> 31;
+                if (z & 1) == 1 {
+                    sum += v;
+                } else {
+                    sum -= v;
+                }
+            }
+            if sum.abs() >= thresh {
+                ge_count += 1;
+            }
+        }
+        // Standard Phipson-Smyth Monte Carlo permutation p-value: (ge + 1) / (draws + 1) > 0
+        Some(f64::from(ge_count + 1) / f64::from(draws + 1))
+    }
+}
+
+/// Counterfactual entity-redacted dose-response probe (`elicitation-measurement` Finding #3):
+/// verifies that retrospective backtest forecasts respond monotonically to counterfactual parameter
+/// doses once memorized entity/statute names are redacted.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CounterfactualDoseProbe;
+
+impl CounterfactualDoseProbe {
+    /// Replaces known entity/statute headers longest-first & case-insensitively with neutral
+    /// placeholders (`[ENTITY_1]`, ... preserving original 1-based entity index).
+    #[must_use]
+    pub fn redact_entity_names(text: &str, entities: &[&str]) -> String {
+        let mut indexed: Vec<(usize, &str)> = entities
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| !e.is_empty())
+            .map(|(i, &e)| (i + 1, e))
+            .collect();
+        // Replace longest entity names first so "Fed" never corrupts "Federal Reserve".
+        indexed.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+
+        let mut out = text.to_owned();
+        for (slot, entity) in indexed {
+            let placeholder = format!("[ENTITY_{slot}]");
+            out = replace_ascii_case_insensitive(&out, entity, &placeholder);
+        }
+        out
+    }
+
+    /// Checks whether forecasted outputs move monotonically across sorted `(dose, forecast)` pairs
+    /// (`expected_increasing = true` requires strictly distinct doses and `f(d_{i+1}) >= f(d_i)`).
+    #[must_use]
+    pub fn is_dose_monotone(dose_forecasts: &[(f64, f64)], expected_increasing: bool) -> bool {
+        if dose_forecasts.len() < 2
+            || dose_forecasts
+                .iter()
+                .any(|(d, f)| !d.is_finite() || !f.is_finite())
+        {
+            return false;
+        }
+        let mut sorted = dose_forecasts.to_vec();
+        sorted.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+        if (sorted[sorted.len() - 1].0 - sorted[0].0).abs() <= 1e-12 {
+            return false;
+        }
+        let mono = sorted.windows(2).all(|w| {
+            if (w[1].0 - w[0].0).abs() <= 1e-12 {
+                // Duplicate dose must yield consistent forecast
+                (w[1].1 - w[0].1).abs() <= 1e-12
+            } else if expected_increasing {
+                w[1].1 >= w[0].1 - 1e-12
+            } else {
+                w[1].1 <= w[0].1 + 1e-12
+            }
+        });
+        let net_delta = sorted[sorted.len() - 1].1 - sorted[0].1;
+        let strict_move = if expected_increasing {
+            net_delta > 1e-9
+        } else {
+            net_delta < -1e-9
+        };
+        mono && strict_move
+    }
+}
+
+fn replace_ascii_case_insensitive(haystack: &str, needle: &str, replacement: &str) -> String {
+    let lower_h = haystack.to_ascii_lowercase();
+    let lower_n = needle.to_ascii_lowercase();
+    if lower_n.is_empty() {
+        return haystack.to_owned();
+    }
+    let mut out = String::with_capacity(haystack.len());
+    let mut last = 0usize;
+    while let Some(rel) = lower_h[last..].find(&lower_n) {
+        let start = last + rel;
+        out.push_str(&haystack[last..start]);
+        out.push_str(replacement);
+        last = start + needle.len();
+    }
+    out.push_str(&haystack[last..]);
+    out
 }
 
 /// Dual-denominator (`Investigated` vs. `Full-Universe`) proper-score report (`§12.4`, `GATE-06`).
@@ -460,13 +669,12 @@ pub fn run_m15_demo_pipeline(
 
                 // Optional live Gemini call via gemini-api-cli when --live-gemini is supplied
                 let raw_json_output = if let Some(client) = live_gemini {
-                    let mut req = GeminiGenerateRequest::new(
-                        GEMINI_4_HYDROGEN,
-                        format!(
-                            "Estimate probability in (0,1) for: {}. Context: {}. Reply strictly as JSON {{\"probability\": <float>}}.",
-                            q.title, scrubbed_ev
-                        ),
+                    let scrubbed_title = MarketBlindingScrubber::scrub_text(&q.title);
+                    let prompt = format!(
+                        "Estimate probability in (0,1) for: {scrubbed_title}. Context: {scrubbed_ev}. Reply strictly as JSON {{\"probability\": <float>}}."
                     );
+                    MarketBlindingScrubber::assert_blind_payload(&prompt)?;
+                    let mut req = GeminiGenerateRequest::new(GEMINI_4_HYDROGEN, prompt);
                     req.system_instruction =
                         Some("Return ONLY valid JSON {\"probability\": number}.".into());
                     match client.generate(&req) {
@@ -532,8 +740,8 @@ pub fn run_m15_demo_pipeline(
                         n_eff: if arm_prefix == "arm_r0" { 4.0 } else { 10.0 },
                     },
                     evidence_handles: bundle.map_or_else(Vec::new, |b| b.evidence_handles),
-                    model_version: model_tag.into(),
-                    calibration_version: format!("cal-m1.5:{}", snap.snapshot_id),
+                    model_version: format!("{model_tag}+{}", plan.effort_context_disclosure),
+                    calibration_version: format!("cal-m2:{}", snap.snapshot_id),
                     rationale_handle: rat_art.ev_handle,
                     resolution_status: ResolutionStatusAtCutoff::Unresolved,
                 }
@@ -591,6 +799,29 @@ pub fn run_m15_demo_pipeline(
     let skill_gate_passed =
         delta_brier < 0.0 && delta_log > 0.0 && arm_r3.bss_vs_crowd_full_universe > 0.0;
 
+    // Audit stored revisions against evidence_vault_index to compute actual temporal_leaks count.
+    let mut leak_stmt = conn.prepare(
+        "SELECT r.as_of_utc, r.evidence_handles, r.rationale_handle FROM forecast_revisions r",
+    )?;
+    let rev_rows: Vec<(String, String, String)> = leak_stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut temporal_leaks = 0usize;
+    for (as_of, handles_json, rat_handle) in rev_rows {
+        let mut handles: Vec<String> = serde_json::from_str(&handles_json)?;
+        handles.push(rat_handle);
+        for h in handles {
+            let avail: String = conn.query_row(
+                "SELECT available_utc FROM evidence_vault_index WHERE ev_handle = ?1",
+                params![&h],
+                |r| r.get(0),
+            )?;
+            if !fcast_core::time::is_utc_le(&avail, &as_of) {
+                temporal_leaks += 1;
+            }
+        }
+    }
+
     Ok(M15DemoReport {
         cohort_size: cohort.len(),
         tuning_snapshot_id: snap.snapshot_id,
@@ -605,6 +836,6 @@ pub fn run_m15_demo_pipeline(
         delta_log_full_universe: delta_log,
         delta_bss_vs_crowd_full_universe: delta_bss,
         skill_gate_passed,
-        temporal_leaks: 0,
+        temporal_leaks,
     })
 }

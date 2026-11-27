@@ -1,6 +1,7 @@
 //! Cross-question coherence (`PAV`, Fréchet `Combo`), `MetaculusCdfBuilder` (`§12.5`),
 //! multimodal probability-space CDF mixture pooling, Empirical-Bayes shrinkage, and `M_eff` (`§11.4`).
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq)]
@@ -11,6 +12,174 @@ pub enum CoherenceError {
     EmptyPercentiles,
     #[error("cdf mixture lengths or weights invalid")]
     InvalidMixture,
+    #[error("silent quantile format downgrade rejected: cannot degrade {from:?} to {to:?}")]
+    QuantileFormatDowngrade {
+        from: ElicitationFormat,
+        to: ElicitationFormat,
+    },
+}
+
+/// Native distribution elicitation format (`elicitation-measurement` Finding #4 / `PR #78`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ElicitationFormat {
+    /// Full 13-percentile (or `201`-pt) native quantile grid.
+    NativeQuantiles,
+    /// Three-point central interval `(p10, p50, p90)` transform.
+    IntervalTransform3Pt,
+    /// Scalar binary probability.
+    BinaryScalar,
+}
+
+/// Fail-closed guard preventing silent downgrade of native elicited quantiles through a
+/// fixed 3-point interval transform (`-0.034` nCRPS loss in `elicitation-measurement` PR #78).
+pub fn guard_quantile_promotion(
+    elicited: ElicitationFormat,
+    published: ElicitationFormat,
+) -> Result<(), CoherenceError> {
+    if elicited == ElicitationFormat::NativeQuantiles
+        && published == ElicitationFormat::IntervalTransform3Pt
+    {
+        return Err(CoherenceError::QuantileFormatDowngrade {
+            from: elicited,
+            to: published,
+        });
+    }
+    Ok(())
+}
+
+/// Deterministic zero-LLM-call pointwise median CDF pooling across `K >= 1` independent rollouts
+/// (`pointwise_median_cdf_v1`, `elicitation-measurement` Finding #2).
+///
+/// Preserves monotonicity and exact support grid length without invoking any additional LLM call.
+pub fn pointwise_median_cdf(cdfs: &[Vec<f64>]) -> Result<Vec<f64>, CoherenceError> {
+    if cdfs.is_empty() {
+        return Err(CoherenceError::InvalidMixture);
+    }
+    let len = cdfs[0].len();
+    if len < 2 || cdfs.iter().any(|c| c.len() != len) {
+        return Err(CoherenceError::InvalidMixture);
+    }
+    if cdfs.iter().any(|c| {
+        c.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            || c.windows(2).any(|w| w[1] < w[0] - 1e-12)
+    }) {
+        return Err(CoherenceError::InvalidMixture);
+    }
+
+    let k = cdfs.len();
+    let mut col = Vec::with_capacity(k);
+    let mut out = Vec::with_capacity(len);
+    for idx in 0..len {
+        col.clear();
+        for cdf in cdfs {
+            col.push(cdf[idx]);
+        }
+        col.sort_by(f64::total_cmp);
+        let med = if k % 2 == 1 {
+            col[k / 2]
+        } else {
+            0.5 * (col[k / 2 - 1] + col[k / 2])
+        };
+        out.push(med);
+    }
+    // Pointwise median of monotone CDFs is monotone up to float rounding; clamp residual eps.
+    for i in 1..len {
+        if out[i] < out[i - 1] {
+            out[i] = out[i - 1];
+        }
+    }
+    Ok(out)
+}
+
+/// Computes the `elicitation-measurement` revealed-vs-stated spread ratio across `K >= 2`
+/// repeated rollouts: `spread(rollout_medians) / (stated_p90 - stated_p10)`.
+///
+/// Empirically (728 cells, median `0.26`), this ratio predicts interval miscalibration
+/// ($\rho = 0.209, p \approx 10^{-8}$) and distinguishes belief shifts from pure confidence shifts.
+#[must_use]
+pub fn revealed_vs_stated_spread_ratio(
+    rollout_medians: &[f64],
+    stated_p10: f64,
+    stated_p90: f64,
+) -> Option<f64> {
+    if rollout_medians.len() < 2
+        || !stated_p10.is_finite()
+        || !stated_p90.is_finite()
+        || rollout_medians.iter().any(|x| !x.is_finite())
+    {
+        return None;
+    }
+    let stated_width = stated_p90 - stated_p10;
+    if stated_width <= 1e-12 {
+        return None;
+    }
+    let n = rollout_medians.len() as f64;
+    let mean = rollout_medians.iter().sum::<f64>() / n;
+    let var = rollout_medians
+        .iter()
+        .map(|x| (x - mean).powi(2))
+        .sum::<f64>()
+        / (n - 1.0);
+    // 80% normal-equivalent spread (`2 * 1.28155 * sd`) compared against stated 80% width
+    let revealed_width_80 = 2.0 * 1.281_551_565_544_600_4 * var.sqrt();
+    let ratio = revealed_width_80 / stated_width;
+    ratio.is_finite().then_some(ratio)
+}
+
+/// Evaluates a continuous piecewise-linear CDF `(xs, cdf)` at an exchange strike `strike`
+/// with grid-rounding continuity correction (`grid_step = g`):
+/// - `strict_gt = true` (`Y > s`): `1 - F(s + g / 2)`
+/// - `strict_gt = false` (`Y >= s`): `1 - F(s - g / 2)`
+pub fn strike_exceedance_prob_with_continuity(
+    xs: &[f64],
+    cdf: &[f64],
+    strike: f64,
+    grid_step: f64,
+    strict_gt: bool,
+) -> Result<f64, CoherenceError> {
+    if xs.len() < 2
+        || xs.len() != cdf.len()
+        || !strike.is_finite()
+        || !grid_step.is_finite()
+        || grid_step < 0.0
+    {
+        return Err(CoherenceError::InvalidMixture);
+    }
+    if xs
+        .windows(2)
+        .any(|w| !w[0].is_finite() || !w[1].is_finite() || w[1] <= w[0])
+    {
+        return Err(CoherenceError::InvalidBounds(xs[0], xs[xs.len() - 1]));
+    }
+    if cdf
+        .iter()
+        .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+        || cdf.windows(2).any(|w| w[1] < w[0] - 1e-12)
+    {
+        return Err(CoherenceError::InvalidMixture);
+    }
+    let shifted = if strict_gt {
+        strike + 0.5 * grid_step
+    } else {
+        strike - 0.5 * grid_step
+    };
+    let f_val = if shifted <= xs[0] {
+        cdf[0]
+    } else if shifted >= xs[xs.len() - 1] {
+        cdf[cdf.len() - 1]
+    } else {
+        let mut out = cdf[cdf.len() - 1];
+        for i in 0..(xs.len() - 1) {
+            if shifted >= xs[i] && shifted <= xs[i + 1] {
+                let frac = (shifted - xs[i]) / (xs[i + 1] - xs[i]);
+                out = cdf[i] + frac * (cdf[i + 1] - cdf[i]);
+                break;
+            }
+        }
+        out
+    };
+    Ok((1.0 - f_val).clamp(0.0, 1.0))
 }
 
 /// Pure-Rust port of `Metaculus/forecasting-tools` `NumericDistribution` (`§12.5`).
@@ -55,24 +224,48 @@ pub fn build_metaculus_cdf(
     }
     let n = match inbound_outcome_count {
         Some(0) => return Err(CoherenceError::InvalidBounds(0.0, upper_bound)),
-        Some(c) => c + 1,
+        Some(c) => c
+            .checked_add(1)
+            .ok_or(CoherenceError::InvalidBounds(lower_bound, upper_bound))?,
         None => 201,
     };
 
+    let log_denom = if let Some(z) = zero_point {
+        let d = ((upper_bound - z) / (lower_bound - z)).ln();
+        if !d.is_finite() || d.abs() < 1e-12 {
+            return Err(CoherenceError::InvalidBounds(lower_bound, upper_bound));
+        }
+        Some((z, d))
+    } else {
+        None
+    };
+
     let to_unit = |x: f64| -> f64 {
-        if let Some(z) = zero_point {
-            ((x - z) / (lower_bound - z)).ln() / ((upper_bound - z) / (lower_bound - z)).ln()
+        if let Some((z, denom)) = log_denom {
+            ((x - z) / (lower_bound - z)).ln() / denom
         } else {
             (x - lower_bound) / (upper_bound - lower_bound)
         }
     };
 
     let mut pts: Vec<(f64, f64)> = percentiles.iter().map(|&(v, p)| (to_unit(v), p)).collect();
+    if pts.iter().any(|(x, _)| !x.is_finite()) {
+        return Err(CoherenceError::InvalidBounds(lower_bound, upper_bound));
+    }
     pts.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-    let lo_val = if open_lower { pts[0].1.max(0.001) } else { 0.0 };
+    let max_lo = if open_upper {
+        (0.999 - min_step * ((n - 1) as f64)).max(0.001)
+    } else {
+        (1.0 - min_step * ((n - 1) as f64)).max(0.001)
+    };
+    let lo_val = if open_lower {
+        pts[0].1.clamp(0.001, max_lo)
+    } else {
+        0.0
+    };
     let hi_val = if open_upper {
-        pts[pts.len() - 1].1.min(0.999)
+        pts[pts.len() - 1].1.clamp(lo_val, 0.999)
     } else {
         1.0
     };
@@ -106,10 +299,14 @@ pub fn build_metaculus_cdf(
         cdf.push(val);
     }
 
-    cdf[0] = if open_lower { cdf[0].max(0.001) } else { 0.0 };
+    cdf[0] = if open_lower {
+        cdf[0].clamp(0.001, max_lo)
+    } else {
+        0.0
+    };
     let last_idx = n - 1;
     cdf[last_idx] = if open_upper {
-        cdf[last_idx].min(0.999)
+        cdf[last_idx].clamp(cdf[0], 0.999)
     } else {
         1.0
     };
@@ -121,18 +318,22 @@ pub fn build_metaculus_cdf(
 
     let span_cur = cdf[last_idx] - cdf[0];
     let target_hi = if open_upper {
-        cdf[last_idx].min(0.999)
+        cdf[last_idx].clamp(cdf[0], 0.999)
     } else {
         1.0
     };
     let span_tgt = target_hi - cdf[0];
-    if span_cur > 0.0 && (cdf[last_idx] - target_hi).abs() > 1e-12 {
+    if span_cur > 0.0 && span_tgt > 0.0 && (cdf[last_idx] - target_hi).abs() > 1e-12 {
         let c0 = cdf[0];
         for c in &mut cdf {
             *c = c0 + (*c - c0) * (span_tgt / span_cur);
         }
     }
-    cdf[0] = if open_lower { cdf[0].max(0.001) } else { 0.0 };
+    cdf[0] = if open_lower {
+        cdf[0].clamp(0.001, target_hi)
+    } else {
+        0.0
+    };
     cdf[last_idx] = target_hi;
     Ok(cdf)
 }
@@ -147,6 +348,12 @@ pub fn mix_cdfs_probability_space(
     }
     let len = cdfs[0].len();
     if len < 2 || cdfs.iter().any(|c| c.len() != len) {
+        return Err(CoherenceError::InvalidMixture);
+    }
+    if cdfs
+        .iter()
+        .any(|c| c.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)))
+    {
         return Err(CoherenceError::InvalidMixture);
     }
     let w_sum: f64 = weights.iter().sum();
@@ -207,8 +414,16 @@ pub fn eb_shrink_base_rate(k_hits: u32, n_obs: u32, mu_parent: f64, m_pseudo: f6
 /// Correlation-adjusted effective independent model count `M_eff` (`§11.4`).
 #[must_use]
 pub fn effective_model_count(m_models: usize, mean_pair_corr: f64) -> f64 {
+    if m_models == 0 {
+        return 0.0;
+    }
+    let corr = if mean_pair_corr.is_finite() {
+        mean_pair_corr.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     let m = m_models as f64;
-    m / (1.0 + (m - 1.0) * mean_pair_corr.clamp(0.0, 1.0))
+    m / (1.0 + (m - 1.0) * corr)
 }
 
 #[cfg(test)]
@@ -305,5 +520,43 @@ mod tests {
         let mu = eb_shrink_base_rate(0, 3, 0.20, 5.0);
         assert!(mu > 0.10 && mu < 0.15);
         assert!((effective_model_count(4, 0.5) - 1.6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn elicitation_median_cdf_continuity_spread_and_quantile_guard() {
+        let c1 = vec![0.0, 0.2, 0.6, 1.0];
+        let c2 = vec![0.0, 0.3, 0.7, 1.0];
+        let c3 = vec![0.0, 0.8, 0.9, 1.0];
+        let med = pointwise_median_cdf(&[c1, c2, c3]).expect("median cdf");
+        assert_eq!(med, vec![0.0, 0.3, 0.7, 1.0]);
+
+        // Fail-closed quantile downgrade guard
+        assert!(
+            guard_quantile_promotion(
+                ElicitationFormat::NativeQuantiles,
+                ElicitationFormat::IntervalTransform3Pt
+            )
+            .is_err()
+        );
+        assert!(
+            guard_quantile_promotion(
+                ElicitationFormat::NativeQuantiles,
+                ElicitationFormat::NativeQuantiles
+            )
+            .is_ok()
+        );
+
+        // Revealed-vs-stated spread ratio
+        let ratio = revealed_vs_stated_spread_ratio(&[2.40, 2.45, 2.50, 2.42, 2.48], 2.0, 3.0)
+            .expect("ratio");
+        assert!(ratio > 0.05 && ratio < 0.25);
+
+        // Continuity correction: Y > 2.5 on 0.1 grid evaluates 1 - F(2.55)
+        let xs = [2.0, 2.5, 3.0];
+        let cdf = [0.0, 0.5, 1.0];
+        let p_gt = strike_exceedance_prob_with_continuity(&xs, &cdf, 2.5, 0.1, true).expect("gt");
+        let p_ge = strike_exceedance_prob_with_continuity(&xs, &cdf, 2.5, 0.1, false).expect("ge");
+        assert!((p_gt - 0.45).abs() < 1e-12);
+        assert!((p_ge - 0.55).abs() < 1e-12);
     }
 }

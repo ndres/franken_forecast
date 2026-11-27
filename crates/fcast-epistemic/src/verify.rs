@@ -590,10 +590,10 @@ pub struct ExtractedOptionMap {
     pub rung: ExtractionRung,
 }
 
-/// Applies `THIN_PUBLISH_FLOOR` (`[0.05, 0.95]` when `survivors == 1`, else `[0.02, 0.98]`, `§11.2`).
+/// Applies `THIN_PUBLISH_FLOOR` (`[0.05, 0.95]` when `survivors <= 1`, else `[0.02, 0.98]`, `§11.2`).
 #[must_use]
 pub fn apply_publish_floor(p: f64, survivors: usize) -> f64 {
-    let (lo, hi) = if survivors == 1 {
+    let (lo, hi) = if survivors <= 1 {
         THIN_PUBLISH_FLOOR
     } else {
         NORMAL_PUBLISH_BOUNDS

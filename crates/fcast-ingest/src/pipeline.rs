@@ -2,6 +2,7 @@
 //! (`IntakeSnapshot`) from post-router Plan-Driven Evidence Acquisition (`EvidenceAcquisitionPlan`
 //! -> `EvidenceBundle`), eliminating the `Harvester <-> RepRouter` 2-cycle.
 
+use crate::datapack::ContextCompleteness;
 use crate::domain_gate::DomainDecision;
 use crate::microstructure::BookMarkPrice;
 use fcast_core::blinding::VerifiedEvidenceRef;
@@ -50,6 +51,9 @@ pub struct EvidenceBundle {
     pub seasonal_note_attached: bool,
     pub raw_data_attached: bool,
     pub report_count: u8,
+    /// Fail-closed completeness status (`elicitation-measurement` Finding #5).
+    /// When `Partial`, `PreLoomGuard` forces `THIN_PUBLISH_FLOOR`.
+    pub completeness: ContextCompleteness,
 }
 
 /// Deterministic `FR3b` plan executor over pre-vaulted candidate handles (enforcing plan flags).
@@ -57,6 +61,16 @@ pub struct EvidenceBundle {
 pub fn assemble_evidence_bundle(
     plan: &EvidenceAcquisitionPlan,
     vaulted_handles: Vec<VerifiedEvidenceRef>,
+) -> EvidenceBundle {
+    assemble_evidence_bundle_with_completeness(plan, vaulted_handles, ContextCompleteness::Complete)
+}
+
+/// Deterministic `FR3b` plan executor preserving explicit [`ContextCompleteness`] metadata.
+#[must_use]
+pub fn assemble_evidence_bundle_with_completeness(
+    plan: &EvidenceAcquisitionPlan,
+    vaulted_handles: Vec<VerifiedEvidenceRef>,
+    completeness: ContextCompleteness,
 ) -> EvidenceBundle {
     let mut handles = vaulted_handles;
     handles.sort();
@@ -69,5 +83,6 @@ pub fn assemble_evidence_bundle(
         seasonal_note_attached: plan.attach_seasonal_note,
         raw_data_attached: plan.fetch_raw_data,
         report_count,
+        completeness,
     }
 }

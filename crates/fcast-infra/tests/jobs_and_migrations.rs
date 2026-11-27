@@ -199,11 +199,11 @@ fn gate_02_forward_migration_0002_and_lossless_v1_to_v2_upcast() {
     assert!((p_indep - 0.30).abs() < 1e-12);
     assert!((shift - 0.0).abs() < 1e-12);
 
-    // Confirm _fcast_migrations recorded versions 1, 2, and 4
+    // Confirm _fcast_migrations recorded versions 1, 2, 4, and 5
     let cnt: i64 = conn
         .query_row("SELECT COUNT(*) FROM _fcast_migrations", [], |r| r.get(0))
         .expect("count");
-    assert_eq!(cnt, 3);
+    assert_eq!(cnt, 4);
 }
 
 #[test]

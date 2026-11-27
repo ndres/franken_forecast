@@ -5,6 +5,7 @@
 //! causal KG, and the Two-Speed Dynamic Belief Engine (`M1`–`M3`).
 
 pub mod audit_split;
+pub mod graph;
 pub mod rationales;
 pub mod router;
 pub mod verify;
@@ -14,14 +15,16 @@ use serde::{Deserialize, Serialize};
 pub use audit_split::{
     BindingAuditVerdict, DraftRevisionProposal, PostProposalAudit, PreLoomGuard,
 };
+pub use graph::{CausalEdge, CausalGraph, CausalNode, GraphError, GraphLayer, SpilloverWakeup};
 pub use rationales::{
     CrowdPriorSource, ForecastBenchMedianRow, LockedTurnAScores, RankTier, RationaleError,
     RationaleRecord, ScoredRationale, TurnARequest, TurnBRequest, TurnBResponse, rank_rationales,
     resolve_crowd_prior, score_rationale, spearman_rank_correlation,
 };
 pub use router::{
-    CandidateForecastPlan, PlanConstraintSpec, RepRouter, RepresentationId, SelectedForecastPlan,
-    TuningCacheSnapshot, TuningCellStats,
+    CandidateForecastPlan, ContextTier, JointTuningCell, PlanConstraintSpec, ReasoningEffort,
+    RepRouter, RepresentationId, RoutingCellKey, SelectedForecastPlan, TuningCacheSnapshot,
+    TuningCellStats,
 };
 pub use verify::{
     AuditEvidenceItem, BiTemporalAudit, BiTemporalAuditOutcome, ExtractedOptionMap,

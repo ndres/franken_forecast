@@ -7,7 +7,7 @@ use fcast_core::forecast::{
 };
 use fcast_epistemic::{
     BindingAuditVerdict, DraftRevisionProposal, PlanConstraintSpec, PostProposalAudit,
-    PreLoomGuard, RepRouter, TuningCacheSnapshot,
+    PreLoomGuard, RepRouter, TemplateCatalog, TuningCacheSnapshot,
 };
 use fcast_infra::daemon::{BillingPacingTier, TimeBudget};
 use fcast_infra::llm::{GEMINI_4_HYDROGEN, GeminiCliClient, GeminiGenerateRequest};
@@ -165,28 +165,39 @@ fn run_verify_receipts(
     write_dir: Option<&Path>,
 ) -> Result<GateReceipt, Box<dyn std::error::Error>> {
     let tmpl_dir = repo_root.join("templates");
+    // Fail-closed: verify all 9 SHA-256-locked prompt templates and blinding probes before stamping VERIFIED.
+    let catalog = TemplateCatalog::load_and_verify(&tmpl_dir)?;
+    if !MarketBlindingScrubber::verify_sole_match_probes() {
+        return Err("MarketBlindingScrubber sole-match probe verification failed".into());
+    }
     let mut hasher = Sha256::new();
     let mut count = 0usize;
-    if tmpl_dir.is_dir() {
-        let mut entries: Vec<PathBuf> = fs::read_dir(&tmpl_dir)?
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("tmpl"))
-            .collect();
-        entries.sort();
-        for p in entries {
-            let bytes = fs::read(&p)?;
-            hasher.update(&bytes);
-            count += 1;
-        }
+    let mut entries: Vec<PathBuf> = fs::read_dir(&tmpl_dir)?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("tmpl"))
+        .collect();
+    entries.sort();
+    for p in entries {
+        let bytes = fs::read(&p)?;
+        hasher.update(&bytes);
+        count += 1;
+    }
+    if count != catalog.len() {
+        return Err(format!(
+            "template file count mismatch: found {count}, catalog verified {}",
+            catalog.len()
+        )
+        .into());
     }
     let workspace_sha256 = format!("{:x}", hasher.finalize());
 
     if let Some(dir) = write_dir {
         fs::create_dir_all(dir)?;
         for gate_id in [
-            "GATE-01", "GATE-02", "GATE-04", "GATE-05", "GATE-06", "GATE-08", "GATE-09", "GATE-10",
-            "GATE-11", "GATE-12", "GATE-16", "GATE-17", "GATE-18", "GATE-19", "GATE-24",
+            "GATE-01", "GATE-02", "GATE-03", "GATE-04", "GATE-05", "GATE-06", "GATE-07", "GATE-08",
+            "GATE-09", "GATE-10", "GATE-11", "GATE-12", "GATE-16", "GATE-17", "GATE-18", "GATE-19",
+            "GATE-24",
         ] {
             let rec = GateReceipt {
                 gate_id: gate_id.into(),
@@ -203,7 +214,7 @@ fn run_verify_receipts(
     }
 
     Ok(GateReceipt {
-        gate_id: "M1.5-BUNDLE".into(),
+        gate_id: "M2-BUNDLE".into(),
         status: "VERIFIED",
         tier: "Tier 2 (Crate-Verified)",
         workspace_sha256,
@@ -212,13 +223,13 @@ fn run_verify_receipts(
 }
 
 pub fn run_demo_cli(args: &[String]) -> CliResult {
-    let mut data_root = env::temp_dir().join("fcast_m15_demo");
+    let mut data_root: Option<PathBuf> = None;
     let mut live = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--data-root" => {
-                data_root = PathBuf::from(require_flag_value(args, i, "--data-root")?);
+                data_root = Some(PathBuf::from(require_flag_value(args, i, "--data-root")?));
                 i += 2;
             }
             "--live-gemini" => {
@@ -228,7 +239,13 @@ pub fn run_demo_cli(args: &[String]) -> CliResult {
             other => return Err(format!("unknown flag for `fcast demo`: {other}").into()),
         }
     }
-    let layout = DataRootLayout::init(&data_root)?;
+    let owned_dir = data_root.unwrap_or_else(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        env::temp_dir().join(format!("fcast_m2_demo_{}_{}", std::process::id(), nanos))
+    });
+    let layout = DataRootLayout::init(&owned_dir)?;
     let store = OperationalStore::open(&layout.db_path)?;
     let vault = EvidenceVault::open(&layout.vault_dir)?;
     let cohort = deterministic_m15_demo_cohort();
@@ -275,17 +292,7 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
         }
     }
 
-    let layout = DataRootLayout::init(&data_root)?;
-    let store = OperationalStore::open(&layout.db_path)?;
-    let vault = EvidenceVault::open(&layout.vault_dir)?;
     let snap = TuningCacheSnapshot::cold_start();
-    store.ensure_tuning_snapshot_idempotent(
-        &snap.snapshot_id,
-        &snap.created_utc,
-        snap.resolved_n,
-        &serde_json::to_string(&snap)?,
-    )?;
-
     let intake = IntakeSnapshot {
         question_id: question_id.clone(),
         platform_id: "cli".into(),
@@ -307,7 +314,51 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
         BillingPacingTier::Full,
         &snap,
     );
+    if plan.skipped {
+        return Err(format!(
+            "RepRouter skipped question {question_id}: {}",
+            plan.skip_reason.as_deref().unwrap_or("unspecified")
+        )
+        .into());
+    }
     let scrubbed = MarketBlindingScrubber::scrub_text(&title);
+    let prompt = format!(
+        "Estimate probability in (0,1) for: {scrubbed}. Reply strictly as JSON {{\"probability\": <float>}}."
+    );
+    MarketBlindingScrubber::assert_blind_payload(&prompt)?;
+
+    let client = GeminiCliClient::from_env();
+    let mut req = GeminiGenerateRequest::new(model.clone(), prompt);
+    req.system_instruction = Some("Return ONLY valid JSON {\"probability\": number}.".into());
+    req.dry_run = dry_run;
+    let resp = client.generate(&req)?;
+    if dry_run {
+        // Strictly read-only dry-run: never mutate OperationalStore or EvidenceVault.
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "status": "dry_run_preview",
+            "question_id": question_id,
+            "as_of_utc": as_of_utc,
+            "model": model,
+            "selected_rep": plan.selected_rep,
+            "reasoning_effort": plan.reasoning_effort,
+            "context_tier": plan.context_tier,
+            "rollout_k": plan.rollout_k,
+            "reshaped_spec_hash": plan.reshaped_spec_hash,
+            "dry_run": true,
+            "gemini_preview": resp.raw_json,
+        }))?);
+    }
+
+    let layout = DataRootLayout::init(&data_root)?;
+    let store = OperationalStore::open(&layout.db_path)?;
+    let vault = EvidenceVault::open(&layout.vault_dir)?;
+    store.ensure_tuning_snapshot_idempotent(
+        &snap.snapshot_id,
+        &snap.created_utc,
+        snap.resolved_n,
+        &serde_json::to_string(&snap)?,
+    )?;
+
     let ev_art = vault.put_bytes("cli_brief", scrubbed.as_bytes())?;
     let contract_sha = format!("{:x}", Sha256::digest(title.as_bytes()));
     store.upsert_question_if_absent(
@@ -324,23 +375,7 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
         .as_ref()
         .map(|ep| assemble_evidence_bundle(ep, vec![ev_art.ev_handle.clone()]));
 
-    let client = GeminiCliClient::from_env();
-    let mut req = GeminiGenerateRequest::new(
-        model.clone(),
-        format!(
-            "Estimate probability in (0,1) for: {scrubbed}. Reply strictly as JSON {{\"probability\": <float>}}."
-        ),
-    );
-    req.system_instruction = Some("Return ONLY valid JSON {\"probability\": number}.".into());
-    req.dry_run = dry_run;
-    let resp = client.generate(&req)?;
-    let raw_out = if dry_run {
-        "{\"probability\": 0.50}".to_owned()
-    } else {
-        resp.text.clone()
-    };
-
-    let (p_guarded, _) = PreLoomGuard::extract_and_guard_prob(&raw_out, 1)?;
+    let (p_guarded, _) = PreLoomGuard::extract_and_guard_prob(&resp.text, 1)?;
     let final_p = match PostProposalAudit::evaluate_binding(&DraftRevisionProposal {
         question_id: question_id.clone(),
         p_prev: ProbClamped::clamp_lossy(0.50),
@@ -358,9 +393,25 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
 
     let fc_id = format!("fc_cli_{question_id}");
     store.ensure_forecast_stream(&fc_id, question_id, "live_tournament")?;
+    if let HorizonProjection::StandingRevision {
+        revision_id,
+        p_indep,
+        ..
+    } = store.project_at_horizon(&fc_id, &as_of_utc)?
+    {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "status": "already_issued",
+            "revision_id": revision_id,
+            "forecast_id": fc_id,
+            "question_id": question_id,
+            "p_indep": p_indep.get(),
+            "dry_run": false,
+        }))?);
+    }
+
     let rat_art = vault.put_bytes(
         "cli_rat",
-        format!("model={model} dry_run={dry_run} p={:.4}", final_p.get()).as_bytes(),
+        format!("model={model} k=1 p={:.4}", final_p.get()).as_bytes(),
     )?;
     store.index_vault_artifact(&rat_art, &as_of_utc)?;
     let rev = UnsealedForecastRevision {
@@ -376,27 +427,27 @@ pub fn run_forecast_cli(args: &[String]) -> CliResult {
             n_eff: 4.0,
         },
         evidence_handles: bundle.map_or_else(Vec::new, |b| b.evidence_handles),
-        model_version: format!("{model}@m1.5"),
-        calibration_version: format!("cal-m1.5:{}", snap.snapshot_id),
+        // Stamp honest executed configuration (single-pass CLI call, k=1)
+        model_version: format!("{model}@m2+effort:default+ctx:minimal+k:1"),
+        calibration_version: format!("cal-m2:{}", snap.snapshot_id),
         rationale_handle: rat_art.ev_handle,
         resolution_status: ResolutionStatusAtCutoff::Unresolved,
     }
     .seal()?;
-    if matches!(
-        store.project_at_horizon(&fc_id, &as_of_utc)?,
-        HorizonProjection::NotYetIssued
-    ) {
-        store.seal_forecast_revision(&rev)?;
-    }
+    store.seal_forecast_revision(&rev)?;
 
     Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "status": "sealed",
         "revision_id": rev.revision_id,
         "forecast_id": fc_id,
         "question_id": question_id,
         "p_indep": rev.p_indep.get(),
         "selected_rep": plan.selected_rep,
+        "reasoning_effort": plan.reasoning_effort,
+        "context_tier": plan.context_tier,
+        "rollout_k": plan.rollout_k,
         "reshaped_spec_hash": plan.reshaped_spec_hash,
-        "dry_run": dry_run,
+        "dry_run": false,
     }))?)
 }
 

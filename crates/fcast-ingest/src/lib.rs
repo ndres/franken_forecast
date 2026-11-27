@@ -4,12 +4,21 @@
 //! `ForecastBench` connectors, deterministic Geo/Macro/Cyber `DomainGate` + cross-venue
 //! `EquivalenceCluster` alignment, and `Tier W1` Zstd-compressed partitioned L2 tick archives.
 
+pub mod datapack;
 pub mod domain_gate;
 pub mod metaculus;
 pub mod microstructure;
 pub mod pipeline;
+pub mod search;
 pub mod tick_archive;
 
+pub use datapack::{
+    BaselineIntervalMethod, ContextCompleteness, DEFAULT_MAX_RAW_TABLE_BYTES, DataPackError,
+    DataPackObservation, HorvitzThompsonReport, ParsedRawTable, PersistenceAndDriftBaseline,
+    RIGHT_CENSORED_COMPLETENESS_THRESHOLD, ReleaseScheduleAnchor, SeasonalNote, VintageDataPack,
+    build_persistence_baseline, build_seasonal_note, horvitz_thompson_completeness,
+    parse_raw_csv_series, parse_raw_json_series,
+};
 pub use domain_gate::{
     BenchmarkMetrics, ClusterMatcher, DomainCandidate, DomainDecision, DomainGate,
     EquivalenceCluster, MarketContractRef, RejectReason, TargetDomain,
@@ -30,6 +39,11 @@ pub use microstructure::{
 };
 pub use pipeline::{
     EvidenceAcquisitionPlan, EvidenceBundle, IntakeSnapshot, assemble_evidence_bundle,
+    assemble_evidence_bundle_with_completeness,
+};
+pub use search::{
+    MultiProviderSearchAggregator, SearchAggregationReport, SearchDocument, SearchError,
+    SearchProvider, VaultedSearchHit,
 };
 pub use tick_archive::{
     DEFAULT_ZSTD_LEVEL, L2TickRecord, PartitionKey, TickArchive, TickArchiveError,
